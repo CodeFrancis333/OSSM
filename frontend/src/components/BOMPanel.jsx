@@ -16,6 +16,20 @@ export default function BOMPanel({ dia: propDia, setDia: propSetDia, length: pro
     fetchLib()
   }, [])
 
+  // load persisted BOM from backend on mount
+  useEffect(()=>{
+    async function loadBom(){
+      try{
+        const res = await fetch('http://localhost:4000/api/bom')
+        if (res.ok){
+          const data = await res.json()
+          if (Array.isArray(data)) setBomLines(data)
+        }
+      }catch(e){/* ignore */}
+    }
+    loadBom()
+  }, [])
+
   function unitWeight(diaKey){
     if (rebarLib && rebarLib[diaKey]) return rebarLib[diaKey]
     const n = Number(diaKey.replace('mm',''))
@@ -73,6 +87,43 @@ export default function BOMPanel({ dia: propDia, setDia: propSetDia, length: pro
       </div>
 
       <div style={{marginTop:12}}>
+        <div style={{marginBottom:8}}>
+          <button style={{marginRight:8}} onClick={async ()=>{
+            // save BOM to backend
+            try{
+              const res = await fetch('http://localhost:4000/api/bom',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(bomLines||[])})
+              if (res.ok) alert('BOM saved')
+            }catch(e){ alert('Save failed') }
+          }}>Save BOM</button>
+          <button style={{marginRight:8}} onClick={async ()=>{ // export CSV
+            try{
+              const res = await fetch('http://localhost:4000/api/bom/export?type=csv')
+              if (!res.ok) return alert('Export failed')
+              const blob = await res.blob()
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = 'bom.csv'
+              document.body.appendChild(a)
+              a.click()
+              a.remove()
+            }catch(e){ alert('Export failed') }
+          }}>Export CSV</button>
+          <button onClick={async ()=>{ // export JSON
+            try{
+              const res = await fetch('http://localhost:4000/api/bom/export?type=json')
+              if (!res.ok) return alert('Export failed')
+              const blob = await res.blob()
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = 'bom.json'
+              document.body.appendChild(a)
+              a.click()
+              a.remove()
+            }catch(e){ alert('Export failed') }
+          }}>Export JSON</button>
+        </div>
         <div><strong>Unit weight:</strong> {u} kg/m</div>
         <div><strong>Total length:</strong> {totalMeters} m</div>
         <div><strong>Total weight:</strong> {totalKg} kg</div>

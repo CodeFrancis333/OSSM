@@ -9,10 +9,32 @@ function TreeNode({node, depth=0, onSelect, onRequestDelete, onRequestDeleteMemb
       <div style={{display:'flex', alignItems:'center', justifyContent:'space-between'}} onClick={()=>setOpen(!open)}>
         <div style={{display:'flex', alignItems:'center', cursor:'pointer'}}>
           <div style={{width:14, textAlign:'center', marginRight:6}}>{node.children ? (open? '▾':'▸') : ''}</div>
-          <div style={{fontSize:13, color:'#16213e'}} onClick={(e)=>{ e.stopPropagation(); node.id && onSelect && onSelect(node.id) }}>{node.label}</div>
+          <div
+            style={{fontSize:13, color:'#16213e'}}
+            onClick={(e)=>{
+              e.stopPropagation()
+              node.id && onSelect && onSelect({ id: node.id, type: node.type })
+            }}
+          >
+            {node.label}
+          </div>
         </div>
         {node.id ? (
-          <button onClick={(e)=>{ e.stopPropagation(); if (node.type === 'member') { onRequestDeleteMember ? onRequestDeleteMember(node.id) : (onRequestDelete && onRequestDelete({type:'member', id: node.id})) } else { onRequestDelete && onRequestDelete({type:'node', id: node.id}) } }} style={{marginLeft:8}}>Delete</button>
+          <button
+            onClick={(e)=>{
+              e.stopPropagation()
+              if (node.type === 'member') {
+                onRequestDeleteMember ? onRequestDeleteMember(node.id) : (onRequestDelete && onRequestDelete({type:'member', id: node.id}))
+              } else if (node.type === 'footing') {
+                onRequestDelete && onRequestDelete({type:'footing', id: node.id})
+              } else {
+                onRequestDelete && onRequestDelete({type:'node', id: node.id})
+              }
+            }}
+            style={{marginLeft:8}}
+          >
+            Delete
+          </button>
         ) : null}
       </div>
         {open && node.children && (
@@ -27,29 +49,54 @@ function TreeNode({node, depth=0, onSelect, onRequestDelete, onRequestDeleteMemb
   )
 }
 
-export default function TreeSidebar({ open=true, onToggle, getNodes, onSelect, nodes, members, onRequestDelete, onRequestDeleteMember, selectedDia, setSelectedDia, rebarLib }){
+export default function TreeSidebar({ open=true, onToggle, getNodes, onSelect, nodes, members, footings, floors, sections, onRequestDelete, onRequestDeleteMember, selectedDia, setSelectedDia, rebarLib }){
   const rawNodes = nodes && Array.isArray(nodes) ? nodes : ((getNodes && getNodes()) || [])
   const formattedNodes = rawNodes.length ? rawNodes.map((n, idx)=> ({ label: `#${idx}: (${Number(n.position.x).toFixed(2)}, ${Number(n.position.y).toFixed(2)}, ${Number(n.position.z).toFixed(2)})`, id: n.id, type: 'node' })) : [ { label: 'No nodes' } ]
 
   const rawMembers = members && Array.isArray(members) ? members : []
   const nodesById = Object.fromEntries(rawNodes.map(n=>[n.id, n.position]))
+  const sectionsById = Object.fromEntries((sections || []).map(s => [s.id, s]))
   const formattedMembers = rawMembers.length ? rawMembers.map((m, idx)=>{
     const a = nodesById[m.a]
     const b = nodesById[m.b]
     const len = a && b ? Math.hypot(a.x-b.x, a.y-b.y, a.z-b.z) : null
+    const sectionName = m.sectionId && sectionsById[m.sectionId] ? sectionsById[m.sectionId].name : null
     // prefer provided unit weight -> fall back to rebarLib or formula
     const unitWeight = m.unitWeight || (rebarLib && rebarLib[selectedDia]) || (()=>{ const n = Number(String(selectedDia).replace('mm','')); return isNaN(n) ? 0 : +((n*n)/162).toFixed(3) })()
     const weight = unitWeight && len ? +(unitWeight * len).toFixed(3) : null
-    const label = `#${idx}: ${m.a.slice(0,6)} ↔ ${m.b.slice(0,6)}${len ? ` — ${len.toFixed(3)} m` : ''}${weight ? ` • ${weight} kg` : ''}`
+    const label = `#${idx}: ${m.a.slice(0,6)} ↔ ${m.b.slice(0,6)}${m.type ? ` [${m.type}]` : ''}${sectionName ? ` {${sectionName}}` : ''}${len ? ` — ${len.toFixed(3)} m` : ''}${weight ? ` • ${weight} kg` : ''}`
     return { label, id: m.id, type: 'member', length: len, a: m.a, b: m.b }
   }) : [ { label: 'No members' } ]
+
+  const rawFootings = footings && Array.isArray(footings) ? footings : []
+  const formattedFootings = rawFootings.length ? rawFootings.map((f, idx)=> {
+    const sectionName = f.sectionId && sectionsById[f.sectionId] ? sectionsById[f.sectionId].name : null
+    const size = f.size || {}
+    const label = `#${idx}: Node ${f.nodeId?.slice(0,6) || 'unknown'}${sectionName ? ` {${sectionName}}` : ''} (${size.x||0}x${size.y||0}x${size.z||0})`
+    return { label, id: f.id, type: 'footing' }
+  }) : [ { label: 'No footings' } ]
+
+  const rawFloors = floors && Array.isArray(floors) ? floors : []
+  const formattedFloors = rawFloors.length ? rawFloors.map((f)=> ({ label: `${f.name || 'Floor'} @ ${Number(f.elevation || 0).toFixed(2)} m` })) : [ { label: 'No floors' } ]
+
+  const sectionGroups = (sections || []).reduce((acc, s) => {
+    const key = s.category || 'other'
+    if (!acc[key]) acc[key] = []
+    acc[key].push({ label: s.name || 'Section' })
+    return acc
+  }, {})
+  const formattedSections = Object.keys(sectionGroups).length
+    ? Object.keys(sectionGroups).map((k) => ({ label: k, children: sectionGroups[k] }))
+    : [ { label: 'No sections' } ]
 
   const tree = {
     label: 'Project',
     children: [
+      { label: 'Floors', children: formattedFloors },
       { label: 'Nodes', children: formattedNodes },
       { label: 'Members', children: formattedMembers },
-      { label: 'Sections', children: [ {label:'I-Sections'}, {label:'Rectangles'} ] },
+      { label: 'Footings', children: formattedFootings },
+      { label: 'Sections', children: formattedSections },
       { label: 'BOM' }
     ]
   }
