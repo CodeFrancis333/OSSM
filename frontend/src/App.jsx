@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import * as THREE from 'three'
+import { FiBox, FiEdit3, FiLayers, FiClipboard } from 'react-icons/fi'
 import ThreeScene from './components/ThreeScene'
 import SectionEditor from './components/SectionEditor'
 import BOMPanel from './components/BOMPanel'
@@ -1035,21 +1036,22 @@ export default function App(){
       </header>
       <div style={{display:'flex', gap:8, padding:'8px 12px', borderBottom:'1px solid #e2e8f0', background:'#f8fafc'}}>
         {[
-          { key: 'modeling', label: 'Modeling', icon: 'M' },
-          { key: 'detailing', label: 'Detailing', icon: 'D' },
-          { key: 'sections', label: 'Sections', icon: 'S' },
-          { key: 'bom', label: 'BOM', icon: 'B' },
+          { key: 'modeling', label: 'Modeling', icon: FiBox },
+          { key: 'detailing', label: 'Detailing', icon: FiEdit3 },
+          { key: 'sections', label: 'Sections', icon: FiLayers },
+          { key: 'bom', label: 'BOM', icon: FiClipboard },
         ].map((tab) => (
           <button
             key={tab.key}
             onClick={() => handleTabClick(tab.key)}
             title={tab.label}
             style={{
-              width:32,
-              height:32,
+              minWidth:84,
+              height:36,
               display:'inline-flex',
               alignItems:'center',
               justifyContent:'center',
+              gap:6,
               fontWeight:600,
               background: activeTab === tab.key ? '#0b5fff' : '#e2e8f0',
               color: activeTab === tab.key ? '#fff' : '#111',
@@ -1057,7 +1059,8 @@ export default function App(){
               borderRadius:6,
             }}
           >
-            {tab.icon}
+            <tab.icon size={16} />
+            <span style={{fontSize:12}}>{tab.label}</span>
           </button>
         ))}
       </div>
@@ -1074,8 +1077,10 @@ export default function App(){
             onSelect={(sel)=>{
               if (!sel || !threeRef.current) return
               if (sel.type === 'member' && typeof threeRef.current.selectMember === 'function') {
+                setPanelOpen(true)
                 threeRef.current.selectMember(sel.id)
               } else if (sel.type === 'footing' && typeof threeRef.current.selectFooting === 'function') {
+                setPanelOpen(true)
                 threeRef.current.selectFooting(sel.id)
               } else if (sel.type === 'node' && typeof threeRef.current.selectNode === 'function') {
                 setActiveTab('modeling')
@@ -1122,7 +1127,7 @@ export default function App(){
             {showModelingPanel && (
               <div style={{marginBottom:10}}>
                 <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
-                  <div style={{fontWeight:600}}>Nodes</div>
+                  <div style={{fontWeight:600}}>Sketch</div>
                   <button onClick={toggleLineDraw} style={{padding:'6px 10px'}}>
                     {lineDrawMode ? 'Line Draw: On' : 'Line Draw: Off'}
                   </button>
@@ -1132,90 +1137,42 @@ export default function App(){
                     </div>
                   )}
                 </div>
-                <table style={{width:'100%', marginTop:8, borderCollapse:'collapse', fontSize:12}}>
-                  <thead>
-                    <tr>
-                      <th style={{textAlign:'left'}}>ID</th>
-                      <th style={{textAlign:'left'}}>X</th>
-                      <th style={{textAlign:'left'}}>Y</th>
-                      <th style={{textAlign:'left'}}>Z</th>
-                      <th style={{textAlign:'left'}}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td style={{color:'#64748b'}}>new</td>
-                      <td>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={nodeInput.x}
-                          onChange={(e)=> setNodeInput(s => ({ ...s, x: e.target.value }))}
-                          style={{width:80}}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={nodeInput.y}
-                          onChange={(e)=> setNodeInput(s => ({ ...s, y: e.target.value }))}
-                          style={{width:80}}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={nodeInput.z}
-                          onChange={(e)=> setNodeInput(s => ({ ...s, z: e.target.value }))}
-                          style={{width:80}}
-                        />
-                      </td>
-                      <td>
-                        <button onClick={handleAddNodeFromInput} style={{padding:'4px 8px', marginRight:6}}>Add</button>
-                        <button onClick={handleUpdateSelectedNode} disabled={model.selection?.type !== 'node'} style={{padding:'4px 8px', marginRight:6}}>Update</button>
-                        <button onClick={()=> setNodeInput({ x: 0, y: 0, z: 0 })} style={{padding:'4px 8px', marginRight:6}}>Clear</button>
-                        <button onClick={handleDeleteSelectedNode} disabled={model.selection?.type !== 'node'} style={{padding:'4px 8px', color:'#b91c1c'}}>Delete</button>
-                      </td>
-                    </tr>
-                    {model.nodes.map((n, idx) => (
-                      <tr key={n.id}>
-                        <td>{idx}</td>
-                        <td>
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={n.position.x}
-                            onChange={(e)=> handleUpdateNodeInline(n.id, 'x', e.target.value)}
-                            style={{width:80}}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={n.position.y}
-                            onChange={(e)=> handleUpdateNodeInline(n.id, 'y', e.target.value)}
-                            style={{width:80}}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={n.position.z}
-                            onChange={(e)=> handleUpdateNodeInline(n.id, 'z', e.target.value)}
-                            style={{width:80}}
-                          />
-                        </td>
-                        <td>
-                          <button onClick={()=> threeRef.current && threeRef.current.deleteNode && threeRef.current.deleteNode(n.id)} style={{padding:'4px 8px', color:'#b91c1c'}}>Delete</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div style={{display:'flex', alignItems:'center', gap:8, marginTop:8, flexWrap:'wrap'}}>
+                  <label style={{fontSize:12}}>
+                    X
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={nodeInput.x}
+                      onChange={(e)=> setNodeInput(s => ({ ...s, x: e.target.value }))}
+                      style={{width:80, marginLeft:6}}
+                    />
+                  </label>
+                  <label style={{fontSize:12}}>
+                    Y
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={nodeInput.y}
+                      onChange={(e)=> setNodeInput(s => ({ ...s, y: e.target.value }))}
+                      style={{width:80, marginLeft:6}}
+                    />
+                  </label>
+                  <label style={{fontSize:12}}>
+                    Z
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={nodeInput.z}
+                      onChange={(e)=> setNodeInput(s => ({ ...s, z: e.target.value }))}
+                      style={{width:80, marginLeft:6}}
+                    />
+                  </label>
+                  <button onClick={handleAddNodeFromInput} style={{padding:'4px 8px'}}>Add Node</button>
+                  <button onClick={handleUpdateSelectedNode} disabled={model.selection?.type !== 'node'} style={{padding:'4px 8px'}}>Update Selected</button>
+                  <button onClick={()=> setNodeInput({ x: 0, y: 0, z: 0 })} style={{padding:'4px 8px'}}>Clear</button>
+                  <button onClick={handleDeleteSelectedNode} disabled={model.selection?.type !== 'node'} style={{padding:'4px 8px', color:'#b91c1c'}}>Delete Selected</button>
+                </div>
               </div>
             )}
             {showModelingPanel && (
@@ -1486,7 +1443,16 @@ export default function App(){
                 Category
                 <select
                   value={sectionForm.category}
-                  onChange={(e)=> setSectionForm(s => ({ ...s, category: e.target.value }))}
+                  onChange={(e)=> {
+                    const category = e.target.value
+                    const forceRc = category === 'pedestal' || category === 'footing'
+                    setSectionForm(s => ({
+                      ...s,
+                      category,
+                      material: forceRc ? 'rc' : s.material,
+                      shape: forceRc ? 'rect' : s.shape,
+                    }))
+                  }}
                   style={{marginLeft:6}}
                 >
                   <option value="beam">Beam</option>
@@ -1514,7 +1480,7 @@ export default function App(){
                   style={{marginLeft:6}}
                 >
                   <option value="rc">Reinforced Concrete</option>
-                  <option value="steel">Steel</option>
+                  <option value="steel" disabled={sectionForm.category === 'pedestal' || sectionForm.category === 'footing'}>Steel</option>
                 </select>
               </label>
               <label style={{fontSize:12}}>
@@ -1681,7 +1647,7 @@ export default function App(){
                 ))}
               </div>
             )}
-            {(showModelingPanel || showDetailingPanel) && (
+            {(showModelingPanel || showDetailingPanel || showSectionsPanel) && (
               <div style={{display:'flex', alignItems:'center', gap:10, marginTop:12, flexWrap:'wrap'}}>
                 <div style={{fontWeight:600}}>Selection</div>
                 <div style={{fontSize:12}}>

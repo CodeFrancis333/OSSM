@@ -38,6 +38,7 @@ const ThreeScene = forwardRef((props, ref) => {
   const [selectedId, setSelectedId] = useState(null)
   const [tool, setTool] = useState('select') // 'select' | 'extrude'
   const [mouseWorld, setMouseWorld] = useState({ x: 0, y: 0, z: 0 })
+  const rotateModeRef = useRef(false)
 
   const baseLineColor = 0x333333
   const primaryLineColor = 0xff0000
@@ -291,6 +292,7 @@ const ThreeScene = forwardRef((props, ref) => {
       MIDDLE: THREE.MOUSE.ROTATE,
       RIGHT: THREE.MOUSE.DOLLY,
     }
+    controls.enableRotate = false
     controls.update()
 
     // Lights
@@ -607,6 +609,13 @@ const ThreeScene = forwardRef((props, ref) => {
     }
 
     function onPointerDown(ev) {
+      if (ev.button === 1) {
+        setRotateMode(true)
+        return
+      }
+      if (rotateModeRef.current && ev.button === 0) {
+        setRotateMode(false)
+      }
       const hit = pickNode(ev)
       if (!hit) return
 
@@ -755,6 +764,28 @@ const ThreeScene = forwardRef((props, ref) => {
     }
 
     function onKeyDown(ev){
+      if (ev.key === 'Escape') {
+        setRotateMode(false)
+        if (selectedRef.current) {
+          selectedRef.current.material?.emissive?.setHex?.(0x000000)
+          selectedRef.current = null
+        }
+        if (selectedMemberRef.current) {
+          selectedMemberRef.current.line.material &&
+            selectedMemberRef.current.line.material.color.setHex(0x333333)
+          selectedMemberRef.current.mesh?.material?.emissive?.setHex?.(0x000000)
+          selectedMemberRef.current = null
+        }
+        if (selectedFootingRef.current) {
+          selectedFootingRef.current.mesh.material?.emissive?.setHex?.(0x000000)
+          selectedFootingRef.current = null
+        }
+        selectedMembersRef.current.clear()
+        refreshMemberVisuals()
+        setSelectedId(null)
+        props.onSelectionChange && props.onSelectionChange({ type: null, id: null })
+        return
+      }
       if (ev.key === 'Delete' || ev.key === 'Backspace'){
         if (selectedRef.current){
           const id = selectedRef.current.userData.id
@@ -1500,3 +1531,8 @@ const ThreeScene = forwardRef((props, ref) => {
 })
 
 export default ThreeScene
+    function setRotateMode(enabled) {
+      rotateModeRef.current = enabled
+      controls.enableRotate = enabled
+      renderer.domElement.style.cursor = enabled ? 'grab' : 'default'
+    }
