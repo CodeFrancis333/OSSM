@@ -34,16 +34,24 @@ app.get('/api/detailing', (req, res) => {
 })
 
 app.get('/api/aisc', (req, res) => {
-  const p = path.join(DATA_DIR, 'aisc_v16.json')
+  const units = String(req.query.units || 'imperial').toLowerCase()
+  const typeParam = String(req.query.type || '').trim()
+  const types = typeParam ? typeParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean) : null
+  const file = units === 'metric' ? 'aisc_v16_metric.json' : 'aisc_v16_imperial.json'
+  const p = path.join(DATA_DIR, 'aisc', file)
   fs.readFile(p, 'utf8', (err, data)=>{
     if (err) return res.status(500).json({error: 'read error'})
     try{
-      res.json(JSON.parse(data))
+      const json = JSON.parse(data)
+      const shapes = Array.isArray(json.shapes) ? json.shapes : []
+      const filtered = types ? shapes.filter(s => types.includes(String(s.type || '').toUpperCase())) : shapes
+      res.json({ units: json.units || units, shapes: filtered })
     }catch(e){
       res.status(500).json({error:'parse error'})
     }
   })
 })
+
 
 // BOM endpoints
 app.get('/api/bom', (req, res) => {

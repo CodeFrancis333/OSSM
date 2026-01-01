@@ -92,8 +92,14 @@ export function addSection(model, section) {
     id: next.id || `section-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     name: next.name || 'Section',
     category: next.category || 'beam',
+    material: next.material || 'rc',
     shape: next.shape || 'rect',
     dims: next.dims || { b: 0.3, h: 0.5 },
+    centroid: next.centroid || 'center',
+    steelType: next.steelType || null,
+    steelShape: next.steelShape || null,
+    aiscUnits: next.aiscUnits || null,
+    aiscDims: next.aiscDims || null,
   }
   return { ...model, sections: [...model.sections, item] }
 }

@@ -7,7 +7,6 @@ import React, {
 } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
-import computeLCS from '../utils/lcs' // keep if you have it; safe-guarded with try/catch below
 
 // local snap helper to avoid import mismatches
 function snapToGrid(v, grid = 1) {
@@ -31,6 +30,7 @@ const ThreeScene = forwardRef((props, ref) => {
   const selectedMemberRef = useRef(null)
   const selectedFootingRef = useRef(null)
   const selectedRef = useRef(null)
+  const selectedMembersRef = useRef(new Set())
   const addNodeRef = useRef(null)
   const addMemberRef = useRef(null)
   const addFootingRef = useRef(null)
@@ -38,6 +38,33 @@ const ThreeScene = forwardRef((props, ref) => {
   const [selectedId, setSelectedId] = useState(null)
   const [tool, setTool] = useState('select') // 'select' | 'extrude'
   const [mouseWorld, setMouseWorld] = useState({ x: 0, y: 0, z: 0 })
+
+  const baseLineColor = 0x333333
+  const primaryLineColor = 0xff0000
+  const multiLineColor = 0xffa500
+
+  function setMemberVisual(m, mode) {
+    if (!m || !m.line) return
+    if (mode === 'primary') {
+      m.line.material && m.line.material.color.setHex(primaryLineColor)
+      m.mesh?.material?.emissive?.setHex?.(0x222222)
+    } else if (mode === 'multi') {
+      m.line.material && m.line.material.color.setHex(multiLineColor)
+      m.mesh?.material?.emissive?.setHex?.(0x553300)
+    } else {
+      m.line.material && m.line.material.color.setHex(baseLineColor)
+      m.mesh?.material?.emissive?.setHex?.(0x000000)
+    }
+  }
+
+  function refreshMemberVisuals() {
+    const primaryId = selectedMemberRef.current?.id
+    membersRef.current.forEach((m) => {
+      if (m.id === primaryId) return setMemberVisual(m, 'primary')
+      if (selectedMembersRef.current.has(m.id)) return setMemberVisual(m, 'multi')
+      setMemberVisual(m, 'none')
+    })
+  }
 
   const rulerTopRef = useRef(null)
   const rulerLeftRef = useRef(null)
@@ -55,12 +82,15 @@ const ThreeScene = forwardRef((props, ref) => {
       const found = nodesRef.current.find((n) => n.userData.id === id)
       if (!found) return
 
+      selectedMembersRef.current.clear()
+      refreshMemberVisuals()
       if (selectedRef.current && selectedRef.current !== found) {
         selectedRef.current.material?.emissive?.setHex?.(0x000000)
       }
       if (selectedMemberRef.current) {
         selectedMemberRef.current.line.material &&
           selectedMemberRef.current.line.material.color.setHex(0x333333)
+        selectedMemberRef.current.mesh?.material?.emissive?.setHex?.(0x000000)
         selectedMemberRef.current = null
       }
       if (selectedFootingRef.current) {
@@ -75,6 +105,7 @@ const ThreeScene = forwardRef((props, ref) => {
     selectMember: (id) => {
       const found = membersRef.current.find((m) => m.id === id)
       if (!found) return
+      selectedMembersRef.current = new Set([found.id])
       if (selectedRef.current) {
         selectedRef.current.material?.emissive?.setHex?.(0x000000)
         selectedRef.current = null
@@ -82,6 +113,7 @@ const ThreeScene = forwardRef((props, ref) => {
       if (selectedMemberRef.current && selectedMemberRef.current !== found) {
         selectedMemberRef.current.line.material &&
           selectedMemberRef.current.line.material.color.setHex(0x333333)
+        selectedMemberRef.current.mesh?.material?.emissive?.setHex?.(0x000000)
       }
       if (selectedFootingRef.current) {
         selectedFootingRef.current.mesh.material?.emissive?.setHex?.(0x000000)
@@ -89,12 +121,14 @@ const ThreeScene = forwardRef((props, ref) => {
       }
       selectedMemberRef.current = found
       setSelectedId(null)
-      props.onSelectionChange && props.onSelectionChange({ type: 'member', id: found.id })
-      found.line.material && found.line.material.color.setHex(0xff0000)
+      props.onSelectionChange && props.onSelectionChange({ type: 'member', id: found.id, multi: Array.from(selectedMembersRef.current) })
+      refreshMemberVisuals()
     },
     selectFooting: (id) => {
       const found = footingsRef.current.find((f) => f.id === id)
       if (!found) return
+      selectedMembersRef.current.clear()
+      refreshMemberVisuals()
       if (selectedRef.current) {
         selectedRef.current.material?.emissive?.setHex?.(0x000000)
         selectedRef.current = null
@@ -102,6 +136,7 @@ const ThreeScene = forwardRef((props, ref) => {
       if (selectedMemberRef.current) {
         selectedMemberRef.current.line.material &&
           selectedMemberRef.current.line.material.color.setHex(0x333333)
+        selectedMemberRef.current.mesh?.material?.emissive?.setHex?.(0x000000)
         selectedMemberRef.current = null
       }
       if (selectedFootingRef.current && selectedFootingRef.current !== found) {
@@ -141,11 +176,31 @@ const ThreeScene = forwardRef((props, ref) => {
       if (mi === -1) return false
       const m = membersRef.current[mi]
       m.line.parent && m.line.parent.remove(m.line)
+      if (m.mesh && m.mesh.parent) m.mesh.parent.remove(m.mesh)
       membersRef.current.splice(mi, 1)
+      selectedMembersRef.current.delete(memberId)
       selectedMemberRef.current = null
+      refreshMemberVisuals()
       props.onSelectionChange && props.onSelectionChange({ type: null, id: null })
       emitSceneChange()
       return true
+    },
+    setMemberSelection: (ids) => {
+      const list = Array.isArray(ids) ? ids : []
+      selectedMembersRef.current = new Set(list)
+      const primaryId = list.length ? list[list.length - 1] : null
+      const primaryMember = primaryId
+        ? membersRef.current.find((m) => m.id === primaryId) || null
+        : null
+      selectedMemberRef.current = primaryMember
+      selectedRef.current = null
+      setSelectedId(null)
+      refreshMemberVisuals()
+      if (selectedMemberRef.current) {
+        props.onSelectionChange && props.onSelectionChange({ type: 'member', id: selectedMemberRef.current.id, multi: Array.from(selectedMembersRef.current) })
+      } else {
+        props.onSelectionChange && props.onSelectionChange({ type: null, id: null })
+      }
     },
     deleteFooting: (footingId) => {
       const fi = footingsRef.current.findIndex((f) => f.id === footingId)
@@ -231,6 +286,11 @@ const ThreeScene = forwardRef((props, ref) => {
 
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.target.set(0, 0, 0)
+    controls.mouseButtons = {
+      LEFT: THREE.MOUSE.NONE,
+      MIDDLE: THREE.MOUSE.ROTATE,
+      RIGHT: THREE.MOUSE.DOLLY,
+    }
     controls.update()
 
     // Lights
@@ -334,27 +394,7 @@ const ThreeScene = forwardRef((props, ref) => {
     plane.rotateX(-Math.PI / 2)
     scene.add(plane)
 
-    // Optional demo member + LCS axes
-    try {
-      const p1 = new THREE.Vector3(0, 0, 0)
-      const p2 = new THREE.Vector3(4, 0, 2)
-      const demoLine = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints([p1, p2]),
-        new THREE.LineBasicMaterial({ color: 0x0b5fff })
-      )
-      scene.add(demoLine)
-
-      const lcs = computeLCS(p1, p2, 30)
-      const origin = p1.clone()
-      const axisLen = 1.2
-      scene.add(
-        new THREE.ArrowHelper(lcs.x, origin, axisLen, 0xff0000),
-        new THREE.ArrowHelper(lcs.y, origin, axisLen, 0x00ff00),
-        new THREE.ArrowHelper(lcs.z, origin, axisLen, 0x0000ff)
-      )
-    } catch (_) {
-      // ignore if computeLCS not available/throws
-    }
+    // omit demo geometry for a clean scene
 
     // --- Helpers ---
     function addNode(pos, forcedId) {
@@ -366,9 +406,9 @@ const ThreeScene = forwardRef((props, ref) => {
       scene.add(s)
       nodesRef.current.push(s)
       emitSceneChange()
-      addNodeRef.current = addNode
       return s
     }
+    addNodeRef.current = addNode
 
     function addFooting(nodeMesh, size, forcedId, offset, rotation) {
       const footingSize = size || { x: 1, y: 0.4, z: 1 }
@@ -416,14 +456,18 @@ const ThreeScene = forwardRef((props, ref) => {
         aNode,
         bNode,
         offsetY: offsetY || 0,
+        mesh: null,
+        sectionDims: null,
+        sectionMaterial: null,
+        sectionAlign: null,
       }
       ln.userData = ln.userData || {}
       ln.userData.id = m.id
       membersRef.current.push(m)
       emitSceneChange()
-      addMemberRef.current = addMember
       return m
     }
+    addMemberRef.current = addMember
 
     function resolveLevelY(inputY) {
       if (!props.snapToLevel) return inputY
@@ -468,6 +512,9 @@ const ThreeScene = forwardRef((props, ref) => {
           m.line.geometry.setAttribute('position', new THREE.BufferAttribute(arr, 3))
           m.line.geometry.attributes.position.needsUpdate = true
           m.line.geometry.computeBoundingSphere()
+          if (m.mesh) {
+            updateMemberMeshTransform(m)
+          }
         }
       })
       emitSceneChange()
@@ -506,7 +553,7 @@ const ThreeScene = forwardRef((props, ref) => {
       setMouseFromEvent(ev)
       const objects = [
         ...nodesRef.current,
-        ...membersRef.current.map((m) => m.line),
+        ...membersRef.current.flatMap((m) => [m.line, m.mesh].filter(Boolean)),
         ...footingsRef.current.map((f) => f.mesh),
       ]
       const hits = raycaster.intersectObjects(objects, false)
@@ -517,6 +564,8 @@ const ThreeScene = forwardRef((props, ref) => {
       if (node) return { type: 'node', object: node }
       const member = membersRef.current.find(m=>m.line === obj)
       if (member) return { type: 'member', object: member }
+      const memberMesh = membersRef.current.find((m) => m.mesh === obj)
+      if (memberMesh) return { type: 'member', object: memberMesh }
       const footing = footingsRef.current.find(f=>f.mesh === obj)
       if (footing) return { type: 'footing', object: footing }
       return null
@@ -567,12 +616,15 @@ const ThreeScene = forwardRef((props, ref) => {
         dragging = true
         dragStart = node.position.clone()
 
+        selectedMembersRef.current.clear()
+        refreshMemberVisuals()
         if (selectedRef.current && selectedRef.current !== node) {
           selectedRef.current.material?.emissive?.setHex?.(0x000000)
         }
         if (selectedMemberRef.current) {
           selectedMemberRef.current.line.material &&
             selectedMemberRef.current.line.material.color.setHex(0x333333)
+          selectedMemberRef.current.mesh?.material?.emissive?.setHex?.(0x000000)
           selectedMemberRef.current = null
         }
         if (selectedFootingRef.current) {
@@ -587,13 +639,16 @@ const ThreeScene = forwardRef((props, ref) => {
       } else if (hit.type === 'member') {
         // select member
         const member = hit.object
+        const isMulti = !!ev.shiftKey
         if (selectedRef.current) {
           selectedRef.current.material?.emissive?.setHex?.(0x000000)
           selectedRef.current = null
         }
+        if (!isMulti) {
+          selectedMembersRef.current.clear()
+        }
         if (selectedMemberRef.current && selectedMemberRef.current !== member) {
-          selectedMemberRef.current.line.material &&
-            selectedMemberRef.current.line.material.color.setHex(0x333333)
+          selectedMemberRef.current.mesh?.material?.emissive?.setHex?.(0x000000)
         }
         if (selectedFootingRef.current) {
           selectedFootingRef.current.mesh.material?.emissive?.setHex?.(0x000000)
@@ -601,11 +656,27 @@ const ThreeScene = forwardRef((props, ref) => {
         }
         selectedMemberRef.current = member
         setSelectedId(null)
-        props.onSelectionChange && props.onSelectionChange({ type: 'member', id: member.id })
-        // highlight member
-        member.line.material && (member.line.material.color.setHex(0xff0000))
+        if (isMulti) {
+          if (selectedMembersRef.current.has(member.id)) {
+            selectedMembersRef.current.delete(member.id)
+          } else {
+            selectedMembersRef.current.add(member.id)
+          }
+          if (selectedMembersRef.current.size === 0) {
+            selectedMemberRef.current = null
+            props.onSelectionChange && props.onSelectionChange({ type: null, id: null })
+            refreshMemberVisuals()
+            return
+          }
+        } else {
+          selectedMembersRef.current.add(member.id)
+        }
+        props.onSelectionChange && props.onSelectionChange({ type: 'member', id: member.id, multi: Array.from(selectedMembersRef.current) })
+        refreshMemberVisuals()
       } else if (hit.type === 'footing') {
         const footing = hit.object
+        selectedMembersRef.current.clear()
+        refreshMemberVisuals()
         if (selectedRef.current) {
           selectedRef.current.material?.emissive?.setHex?.(0x000000)
           selectedRef.current = null
@@ -613,6 +684,7 @@ const ThreeScene = forwardRef((props, ref) => {
         if (selectedMemberRef.current) {
           selectedMemberRef.current.line.material &&
             selectedMemberRef.current.line.material.color.setHex(0x333333)
+          selectedMemberRef.current.mesh?.material?.emissive?.setHex?.(0x000000)
           selectedMemberRef.current = null
         }
         if (selectedFootingRef.current && selectedFootingRef.current !== footing) {
@@ -727,6 +799,7 @@ const ThreeScene = forwardRef((props, ref) => {
     function clearSceneObjects() {
       nodesRef.current.forEach((n) => n.parent && n.parent.remove(n))
       membersRef.current.forEach((m) => m.line.parent && m.line.parent.remove(m.line))
+      membersRef.current.forEach((m) => m.mesh && m.mesh.parent && m.mesh.parent.remove(m.mesh))
       footingsRef.current.forEach((f) => f.mesh.parent && f.mesh.parent.remove(f.mesh))
       nodesRef.current = []
       membersRef.current = []
@@ -734,6 +807,7 @@ const ThreeScene = forwardRef((props, ref) => {
       selectedMemberRef.current = null
       selectedFootingRef.current = null
       selectedRef.current = null
+      selectedMembersRef.current.clear()
       setSelectedId(null)
     }
 
@@ -744,10 +818,397 @@ const ThreeScene = forwardRef((props, ref) => {
       return typeof h === 'number' ? h / 2 : 0
     }
 
+    function getMemberSectionDims(section) {
+      if (!section || !section.dims) return null
+      const b = Number(section.dims.b)
+      const h = Number(section.dims.h)
+      if (!Number.isFinite(b) || !Number.isFinite(h) || b <= 0 || h <= 0) return null
+      return { b, h }
+    }
+
+    function getWSectionDims(section) {
+      if (!section || !section.aiscDims) return null
+      const units = String(section.aiscUnits || section.units || '').toLowerCase()
+      const scale = units === 'metric' ? 0.001 : 0.0254
+      const d = Number(section.aiscDims.d) * scale
+      const bf = Number(section.aiscDims.bf) * scale
+      const tw = Number(section.aiscDims.tw) * scale
+      const tf = Number(section.aiscDims.tf) * scale
+      if (![d, bf, tw, tf].every((v) => Number.isFinite(v) && v > 0)) return null
+      return { d, bf, tw, tf }
+    }
+
+    function parseFraction(value) {
+      const s = String(value || '').trim()
+      if (!s) return NaN
+      const mixed = s.match(/^(\d+)\s*-\s*(\d+)\s*\/\s*(\d+)$/)
+      if (mixed) {
+        const whole = Number(mixed[1])
+        const num = Number(mixed[2])
+        const den = Number(mixed[3])
+        if (den) return whole + num / den
+      }
+      const frac = s.match(/^(\d+)\s*\/\s*(\d+)$/)
+      if (frac) {
+        const num = Number(frac[1])
+        const den = Number(frac[2])
+        if (den) return num / den
+      }
+      const num = Number(s)
+      return Number.isFinite(num) ? num : NaN
+    }
+
+    function parseHssThicknessFromLabel(label) {
+      const parts = String(label || '').split('X')
+      if (parts.length < 3) return NaN
+      const last = parts[parts.length - 1]
+      return parseFraction(last)
+    }
+
+    function getCSectionDims(section) {
+      if (!section || !section.aiscDims) return null
+      const units = String(section.aiscUnits || section.units || '').toLowerCase()
+      const scale = units === 'metric' ? 0.001 : 0.0254
+      const d = Number(section.aiscDims.d) * scale
+      const bf = Number(section.aiscDims.bf) * scale
+      const tw = Number(section.aiscDims.tw) * scale
+      const tf = Number(section.aiscDims.tf) * scale
+      if (![d, bf, tw, tf].every((v) => Number.isFinite(v) && v > 0)) return null
+      return { d, bf, tw, tf }
+    }
+
+    function getLSectionDims(section) {
+      if (!section || !section.aiscDims) return null
+      const units = String(section.aiscUnits || section.units || '').toLowerCase()
+      const scale = units === 'metric' ? 0.001 : 0.0254
+      const d = Number(section.aiscDims.d) * scale
+      const b = Number(section.aiscDims.b ?? section.aiscDims.bf) * scale
+      const t = Number(section.aiscDims.t ?? section.aiscDims.tw ?? section.aiscDims.tf) * scale
+      if (![d, b, t].every((v) => Number.isFinite(v) && v > 0)) return null
+      return { d, b, t }
+    }
+
+    function getHssSectionDims(section) {
+      if (!section || !section.aiscDims) return null
+      const units = String(section.aiscUnits || section.units || '').toLowerCase()
+      const scale = units === 'metric' ? 0.001 : 0.0254
+      const h = Number(section.aiscDims.Ht ?? section.aiscDims.h ?? section.aiscDims.d) * scale
+      const b = Number(section.aiscDims.B ?? section.aiscDims.b ?? section.aiscDims.bf) * scale
+      let tRaw = section.aiscDims.t ?? section.aiscDims.tw ?? section.aiscDims.tf
+      if (!tRaw) {
+        tRaw = parseHssThicknessFromLabel(section.steelShape)
+      }
+      const t = Number(tRaw) * scale
+      if (![h, b, t].every((v) => Number.isFinite(v) && v > 0)) return null
+      if (t * 2 >= Math.min(h, b)) return null
+      return { h, b, t }
+    }
+
+    function getWTSectionDims(section) {
+      if (!section || !section.aiscDims) return null
+      const units = String(section.aiscUnits || section.units || '').toLowerCase()
+      const scale = units === 'metric' ? 0.001 : 0.0254
+      const d = Number(section.aiscDims.d) * scale
+      const bf = Number(section.aiscDims.bf) * scale
+      const tw = Number(section.aiscDims.tw) * scale
+      const tf = Number(section.aiscDims.tf) * scale
+      if (![d, bf, tw, tf].every((v) => Number.isFinite(v) && v > 0)) return null
+      return { d, bf, tw, tf }
+    }
+
+    function getPipeSectionDims(section) {
+      if (!section || !section.aiscDims) return null
+      const units = String(section.aiscUnits || section.units || '').toLowerCase()
+      const scale = units === 'metric' ? 0.001 : 0.0254
+      const od = Number(section.aiscDims.OD) * scale
+      const id = Number(section.aiscDims.ID) * scale
+      if (!Number.isFinite(od) || od <= 0) return null
+      if (Number.isFinite(id) && id > 0 && id < od) return { od, id }
+      return null
+    }
+
+    function get2LSectionDims(section) {
+      const lDims = getLSectionDims(section)
+      return lDims
+    }
+
+    function buildCSectionGeometry(dims) {
+      const d = dims.d
+      const bf = dims.bf
+      const tw = dims.tw
+      const tf = dims.tf
+      const halfD = d / 2
+      const halfB = bf / 2
+      const shape = new THREE.Shape()
+      shape.moveTo(-halfB, -halfD)
+      shape.lineTo(halfB, -halfD)
+      shape.lineTo(halfB, -halfD + tf)
+      shape.lineTo(-halfB + tw, -halfD + tf)
+      shape.lineTo(-halfB + tw, halfD - tf)
+      shape.lineTo(halfB, halfD - tf)
+      shape.lineTo(halfB, halfD)
+      shape.lineTo(-halfB, halfD)
+      shape.lineTo(-halfB, -halfD)
+      const geom = new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: false })
+      geom.rotateY(Math.PI / 2)
+      geom.translate(-0.5, 0, 0)
+      return geom
+    }
+
+    function buildLSectionGeometry(dims) {
+      const d = dims.d
+      const b = dims.b
+      const t = dims.t
+      const halfD = d / 2
+      const halfB = b / 2
+      const shape = new THREE.Shape()
+      shape.moveTo(-halfB, -halfD)
+      shape.lineTo(halfB, -halfD)
+      shape.lineTo(halfB, -halfD + t)
+      shape.lineTo(-halfB + t, -halfD + t)
+      shape.lineTo(-halfB + t, halfD)
+      shape.lineTo(-halfB, halfD)
+      shape.lineTo(-halfB, -halfD)
+      const geom = new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: false })
+      geom.rotateY(Math.PI / 2)
+      geom.translate(-0.5, 0, 0)
+      return geom
+    }
+
+    function buildHssSectionGeometry(dims) {
+      const h = dims.h
+      const b = dims.b
+      const t = dims.t
+      const outer = new THREE.Shape()
+      outer.moveTo(-b / 2, -h / 2)
+      outer.lineTo(b / 2, -h / 2)
+      outer.lineTo(b / 2, h / 2)
+      outer.lineTo(-b / 2, h / 2)
+      outer.lineTo(-b / 2, -h / 2)
+      const hole = new THREE.Path()
+      hole.moveTo(-b / 2 + t, -h / 2 + t)
+      hole.lineTo(b / 2 - t, -h / 2 + t)
+      hole.lineTo(b / 2 - t, h / 2 - t)
+      hole.lineTo(-b / 2 + t, h / 2 - t)
+      hole.lineTo(-b / 2 + t, -h / 2 + t)
+      outer.holes.push(hole)
+      const geom = new THREE.ExtrudeGeometry(outer, { depth: 1, bevelEnabled: false })
+      geom.rotateY(Math.PI / 2)
+      geom.translate(-0.5, 0, 0)
+      return geom
+    }
+
+    function buildTSectionGeometry(dims) {
+      const d = dims.d
+      const bf = dims.bf
+      const tw = dims.tw
+      const tf = dims.tf
+      const halfD = d / 2
+      const halfB = bf / 2
+      const halfTw = tw / 2
+      const shape = new THREE.Shape()
+      shape.moveTo(-halfB, halfD)
+      shape.lineTo(halfB, halfD)
+      shape.lineTo(halfB, halfD - tf)
+      shape.lineTo(halfTw, halfD - tf)
+      shape.lineTo(halfTw, -halfD)
+      shape.lineTo(-halfTw, -halfD)
+      shape.lineTo(-halfTw, halfD - tf)
+      shape.lineTo(-halfB, halfD - tf)
+      shape.lineTo(-halfB, halfD)
+      const geom = new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: false })
+      geom.rotateY(Math.PI / 2)
+      geom.translate(-0.5, 0, 0)
+      return geom
+    }
+
+    function buildPipeSectionGeometry(dims) {
+      const outer = new THREE.Shape()
+      outer.absarc(0, 0, dims.od / 2, 0, Math.PI * 2, false)
+      const hole = new THREE.Path()
+      hole.absarc(0, 0, dims.id / 2, 0, Math.PI * 2, true)
+      outer.holes.push(hole)
+      const geom = new THREE.ExtrudeGeometry(outer, { depth: 1, bevelEnabled: false })
+      geom.rotateY(Math.PI / 2)
+      geom.translate(-0.5, 0, 0)
+      return geom
+    }
+
+    function build2LSectionGeometry(dims) {
+      const d = dims.d
+      const b = dims.b
+      const t = dims.t
+      const gap = t * 0.5
+      const y0 = -d / 2
+      const y1 = y0 + t
+      const y2 = d / 2
+
+      function angleShape(x0, dir) {
+        const shape = new THREE.Shape()
+        const x1 = x0 + dir * b
+        const x2 = x0 + dir * t
+        shape.moveTo(x0, y0)
+        shape.lineTo(x1, y0)
+        shape.lineTo(x1, y1)
+        shape.lineTo(x2, y1)
+        shape.lineTo(x2, y2)
+        shape.lineTo(x0, y2)
+        shape.lineTo(x0, y0)
+        return shape
+      }
+
+      const left = angleShape(-gap / 2, -1)
+      const right = angleShape(gap / 2, 1)
+      const geom = new THREE.ExtrudeGeometry([left, right], { depth: 1, bevelEnabled: false })
+      geom.rotateY(Math.PI / 2)
+      geom.translate(-0.5, 0, 0)
+      return geom
+    }
+
+    function buildWSectionGeometry(dims) {
+      const d = dims.d
+      const bf = dims.bf
+      const tw = dims.tw
+      const tf = dims.tf
+      const halfD = d / 2
+      const halfB = bf / 2
+      const halfTw = tw / 2
+      const yTop = halfD
+      const yBot = -halfD
+      const yFlangeTop = halfD - tf
+      const yFlangeBot = -halfD + tf
+      const shape = new THREE.Shape()
+      shape.moveTo(-halfB, yTop)
+      shape.lineTo(halfB, yTop)
+      shape.lineTo(halfB, yFlangeTop)
+      shape.lineTo(halfTw, yFlangeTop)
+      shape.lineTo(halfTw, yFlangeBot)
+      shape.lineTo(halfB, yFlangeBot)
+      shape.lineTo(halfB, yBot)
+      shape.lineTo(-halfB, yBot)
+      shape.lineTo(-halfB, yFlangeBot)
+      shape.lineTo(-halfTw, yFlangeBot)
+      shape.lineTo(-halfTw, yFlangeTop)
+      shape.lineTo(-halfB, yFlangeTop)
+      shape.lineTo(-halfB, yTop)
+      const geom = new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: false })
+      geom.rotateY(Math.PI / 2)
+      geom.translate(-0.5, 0, 0)
+      return geom
+    }
+
+    function updateMemberMeshTransform(m) {
+      if (!m.mesh || !m.sectionDims) return
+      const off = m.offsetY || 0
+      const a = m.aNode.position.clone()
+      const b = m.bNode.position.clone()
+      a.y += off
+      b.y += off
+      const dir = b.clone().sub(a)
+      const len = dir.length()
+      if (len <= 0.0001) return
+      const mid = a.clone().add(b).multiplyScalar(0.5)
+      m.mesh.position.copy(mid)
+      const quat = new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(1, 0, 0),
+        dir.normalize()
+      )
+      m.mesh.setRotationFromQuaternion(quat)
+      if (m.mesh.userData && m.mesh.userData.baseLen === 1) {
+        m.mesh.scale.set(len, 1, 1)
+      }
+    }
+
+    function updateMemberMeshes(model, sectionsById) {
+      if (!model) return
+      const membersById = Object.fromEntries((model.members || []).map((m) => [m.id, m]))
+      membersRef.current.forEach((m) => {
+        const meta = membersById[m.id]
+        const section = meta?.sectionId ? sectionsById[meta.sectionId] : null
+        const dims = getMemberSectionDims(section)
+        const preview = meta?.preview || 'shape'
+        if (!dims || preview === 'line') {
+          if (m.mesh) m.mesh.visible = false
+          m.line.visible = true
+          m.sectionDims = null
+          return
+        }
+        let wDims = null
+        let cDims = null
+        let lDims = null
+        let hssDims = null
+        let wtDims = null
+        let pipeDims = null
+        let twoLDims = null
+        if (section?.material === 'steel') {
+          if (section.steelType === 'W') wDims = getWSectionDims(section)
+          if (section.steelType === 'C') cDims = getCSectionDims(section)
+          if (section.steelType === 'L') lDims = getLSectionDims(section)
+          if (section.steelType === 'HSS') hssDims = getHssSectionDims(section)
+          if (section.steelType === 'WT') wtDims = getWTSectionDims(section)
+          if (section.steelType === 'PIPE') pipeDims = getPipeSectionDims(section)
+          if (section.steelType === '2L') twoLDims = get2LSectionDims(section)
+        }
+        const materialKey = section?.material || 'rc'
+        const profileKey = wDims
+          ? `${materialKey}:w:${wDims.d.toFixed(6)}:${wDims.bf.toFixed(6)}:${wDims.tw.toFixed(6)}:${wDims.tf.toFixed(6)}`
+          : cDims
+            ? `${materialKey}:c:${cDims.d.toFixed(6)}:${cDims.bf.toFixed(6)}:${cDims.tw.toFixed(6)}:${cDims.tf.toFixed(6)}`
+            : lDims
+              ? `${materialKey}:l:${lDims.d.toFixed(6)}:${lDims.b.toFixed(6)}:${lDims.t.toFixed(6)}`
+              : hssDims
+                ? `${materialKey}:hss:${hssDims.h.toFixed(6)}:${hssDims.b.toFixed(6)}:${hssDims.t.toFixed(6)}`
+                : wtDims
+                  ? `${materialKey}:wt:${wtDims.d.toFixed(6)}:${wtDims.bf.toFixed(6)}:${wtDims.tw.toFixed(6)}:${wtDims.tf.toFixed(6)}`
+                  : pipeDims
+                    ? `${materialKey}:pipe:${pipeDims.od.toFixed(6)}:${pipeDims.id.toFixed(6)}`
+                    : twoLDims
+                      ? `${materialKey}:2l:${twoLDims.d.toFixed(6)}:${twoLDims.b.toFixed(6)}:${twoLDims.t.toFixed(6)}`
+                      : `${materialKey}:box:${dims.b.toFixed(6)}:${dims.h.toFixed(6)}`
+        if (!m.mesh) {
+          const mat = new THREE.MeshStandardMaterial({
+            color: section.material === 'steel' ? 0x5b6777 : 0x8b9bb0,
+          })
+          let geom = null
+          if (wDims) geom = buildWSectionGeometry(wDims)
+          else if (cDims) geom = buildCSectionGeometry(cDims)
+          else if (lDims) geom = buildLSectionGeometry(lDims)
+          else if (hssDims) geom = buildHssSectionGeometry(hssDims)
+          else if (wtDims) geom = buildTSectionGeometry(wtDims)
+          else if (pipeDims) geom = buildPipeSectionGeometry(pipeDims)
+          else if (twoLDims) geom = build2LSectionGeometry(twoLDims)
+          else geom = new THREE.BoxGeometry(1, dims.h, dims.b)
+          m.mesh = new THREE.Mesh(geom, mat)
+          m.mesh.userData = { baseLen: 1, profileKey }
+          scene.add(m.mesh)
+        } else if (!m.mesh.userData || m.mesh.userData.profileKey !== profileKey) {
+          m.mesh.geometry.dispose()
+          let geom = null
+          if (wDims) geom = buildWSectionGeometry(wDims)
+          else if (cDims) geom = buildCSectionGeometry(cDims)
+          else if (lDims) geom = buildLSectionGeometry(lDims)
+          else if (hssDims) geom = buildHssSectionGeometry(hssDims)
+          else if (wtDims) geom = buildTSectionGeometry(wtDims)
+          else if (pipeDims) geom = buildPipeSectionGeometry(pipeDims)
+          else if (twoLDims) geom = build2LSectionGeometry(twoLDims)
+          else geom = new THREE.BoxGeometry(1, dims.h, dims.b)
+          m.mesh.geometry = geom
+          m.mesh.userData = { baseLen: 1, profileKey }
+          m.mesh.material && (m.mesh.material.color.set(section.material === 'steel' ? 0x5b6777 : 0x8b9bb0))
+        }
+        m.mesh.visible = true
+        m.line.visible = false
+        m.sectionDims = dims
+        m.offsetY = getMemberOffsetY(meta, sectionsById)
+        updateMemberMeshTransform(m)
+      })
+      refreshMemberVisuals()
+    }
     function loadModel(model) {
       clearSceneObjects()
       if (!model) return
-      const sectionsById = Object.fromEntries((model.sections || []).map((s) => [s.id, s]))
+      selectedMembersRef.current.clear()
+      const sectionsById = Object.fromEntries(((props.sections || model.sections) || []).map((s) => [s.id, s]))
       const nodesById = {}
       const nodeList = Array.isArray(model.nodes) ? model.nodes : []
       nodeList.forEach((n) => {
@@ -767,6 +1228,7 @@ const ThreeScene = forwardRef((props, ref) => {
         const node = nodesById[f.nodeId]
         if (node) addFooting(node, f.size, f.id, f.offset, f.rotation)
       })
+      updateMemberMeshes(model, sectionsById)
       if (model.selection && model.selection.id) {
         if (model.selection.type === 'node') {
           const selectedNode = nodesById[model.selection.id]
@@ -782,8 +1244,9 @@ const ThreeScene = forwardRef((props, ref) => {
           const selectedMember = membersRef.current.find((m) => m.id === model.selection.id)
           if (selectedMember) {
             selectedMemberRef.current = selectedMember
+            selectedMembersRef.current.add(selectedMember.id)
             setSelectedId(null)
-            selectedMember.line.material && selectedMember.line.material.color.setHex(0xff0000)
+            refreshMemberVisuals()
           }
         } else if (model.selection.type === 'footing') {
           const selectedFooting = footingsRef.current.find((f) => f.id === model.selection.id)
@@ -799,7 +1262,7 @@ const ThreeScene = forwardRef((props, ref) => {
 
     function updateMemberOffsets(model) {
       if (!model) return
-      const sectionsById = Object.fromEntries((model.sections || []).map((s) => [s.id, s]))
+      const sectionsById = Object.fromEntries(((props.sections || model.sections) || []).map((s) => [s.id, s]))
       const membersById = Object.fromEntries((model.members || []).map((m) => [m.id, m]))
       membersRef.current.forEach((m) => {
         const meta = membersById[m.id]
@@ -812,6 +1275,7 @@ const ThreeScene = forwardRef((props, ref) => {
         m.line.geometry.attributes.position.needsUpdate = true
         m.line.geometry.computeBoundingSphere()
       })
+      updateMemberMeshes(model, sectionsById)
     }
 
     loadModelRef.current = loadModel
@@ -886,7 +1350,7 @@ const ThreeScene = forwardRef((props, ref) => {
 
       if (el.contains(renderer.domElement)) el.removeChild(renderer.domElement)
     }
-  }, [snapEnabled, gridSize, gridDivisions, tool, props.floors, props.nglElevation, props.showVerticalGrid, props.snapToLevel, props.activeLevelId, props.axisLock, props.constrainMembers])
+  }, [snapEnabled, gridSize, gridDivisions, tool, props.floors, props.nglElevation, props.showVerticalGrid, props.snapToLevel, props.activeLevelId, props.axisLock, props.constrainMembers, props.sections])
 
   useEffect(() => {
     if (props.model && updateMemberOffsetsRef.current) {
@@ -984,7 +1448,7 @@ const ThreeScene = forwardRef((props, ref) => {
         </div>
         <div style={{ fontSize: 12, color: '#333' }}>Tool: {tool}</div>
         <div style={{ fontSize: 12, color: '#333', marginTop: 8 }}>
-          Selected: {selectedId || '—'}
+          Selected: {selectedId || 'none'}
         </div>
       </div>
 
