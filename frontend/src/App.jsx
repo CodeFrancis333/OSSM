@@ -53,6 +53,7 @@ export default function App(){
   const [nodeInput, setNodeInput] = useState({ x: 0, y: 0, z: 0 })
   const [memberInputA, setMemberInputA] = useState('')
   const [memberInputB, setMemberInputB] = useState('')
+  const [rotateEnabled, setRotateEnabled] = useState(false)
   const [lineDrawMode, setLineDrawMode] = useState(false)
   const [lineStartId, setLineStartId] = useState(null)
   const [firebaseUid, setFirebaseUid] = useState(null)
@@ -119,7 +120,7 @@ export default function App(){
     setModel(m => setSelection(m, selection))
     if (selection?.type === 'member' && Array.isArray(selection.multi)) {
       setSelectedMemberIds(selection.multi)
-    } else if (selection?.type !== 'member') {
+    } else if (!selection || selection.type !== 'member') {
       setSelectedMemberIds([])
     }
     if (!selection || selection.type !== 'node' || !lineDrawMode) return
@@ -260,6 +261,25 @@ export default function App(){
     }
     setActiveTab(tabKey)
     setPanelOpen(tabKey !== 'bom')
+  }
+
+  function toggleRotateMode(){
+    setRotateEnabled((prev) => {
+      const next = !prev
+      if (threeRef.current && typeof threeRef.current.setRotateMode === 'function') {
+        threeRef.current.setRotateMode(next)
+      }
+      return next
+    })
+  }
+
+  function clearSelection(){
+    updateMultiSelection([])
+    if (threeRef.current && typeof threeRef.current.clearSelection === 'function') {
+      threeRef.current.clearSelection()
+    } else {
+      applyModel(setSelection(model, { type: null, id: null }))
+    }
   }
 
   function handleReset(){
@@ -1126,17 +1146,20 @@ export default function App(){
             >
             {showModelingPanel && (
               <div style={{marginBottom:10}}>
-                <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
-                  <div style={{fontWeight:600}}>Sketch</div>
-                  <button onClick={toggleLineDraw} style={{padding:'6px 10px'}}>
-                    {lineDrawMode ? 'Line Draw: On' : 'Line Draw: Off'}
-                  </button>
-                  {lineDrawMode && (
-                    <div style={{fontSize:12, color:'#334155'}}>
-                      {lineStartId ? `Start: ${lineStartId.slice(0,6)} (pick end node)` : 'Pick start node'}
-                    </div>
-                  )}
-                </div>
+                  <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+                    <div style={{fontWeight:600}}>Sketch</div>
+                    <button onClick={toggleLineDraw} style={{padding:'6px 10px'}}>
+                      {lineDrawMode ? 'Line Draw: On' : 'Line Draw: Off'}
+                    </button>
+                    <button onClick={toggleRotateMode} style={{padding:'6px 10px'}}>
+                      {rotateEnabled ? 'Rotate: On' : 'Rotate: Off'}
+                    </button>
+                    {lineDrawMode && (
+                      <div style={{fontSize:12, color:'#334155'}}>
+                        {lineStartId ? `Start: ${lineStartId.slice(0,6)} (pick end node)` : 'Pick start node'}
+                      </div>
+                    )}
+                  </div>
                 <div style={{display:'flex', alignItems:'center', gap:8, marginTop:8, flexWrap:'wrap'}}>
                   <label style={{fontSize:12}}>
                     X
@@ -1147,6 +1170,7 @@ export default function App(){
                       onChange={(e)=> setNodeInput(s => ({ ...s, x: e.target.value }))}
                       style={{width:80, marginLeft:6}}
                     />
+                    <span style={{marginLeft:4, color:'#94a3b8'}}>m</span>
                   </label>
                   <label style={{fontSize:12}}>
                     Y
@@ -1157,6 +1181,7 @@ export default function App(){
                       onChange={(e)=> setNodeInput(s => ({ ...s, y: e.target.value }))}
                       style={{width:80, marginLeft:6}}
                     />
+                    <span style={{marginLeft:4, color:'#94a3b8'}}>m</span>
                   </label>
                   <label style={{fontSize:12}}>
                     Z
@@ -1167,6 +1192,7 @@ export default function App(){
                       onChange={(e)=> setNodeInput(s => ({ ...s, z: e.target.value }))}
                       style={{width:80, marginLeft:6}}
                     />
+                    <span style={{marginLeft:4, color:'#94a3b8'}}>m</span>
                   </label>
                   <button onClick={handleAddNodeFromInput} style={{padding:'4px 8px'}}>Add Node</button>
                   <button onClick={handleUpdateSelectedNode} disabled={model.selection?.type !== 'node'} style={{padding:'4px 8px'}}>Update Selected</button>
@@ -1176,36 +1202,37 @@ export default function App(){
               </div>
             )}
             {showModelingPanel && (
-              <div style={{display:'flex', alignItems:'center', gap:10, marginTop:8, flexWrap:'wrap'}}>
-                <div style={{fontWeight:600}}>Add Member</div>
-                <label style={{fontSize:12}}>
-                  Node A
-                  <select
-                    value={memberInputA}
-                    onChange={(e)=> setMemberInputA(e.target.value)}
-                    style={{marginLeft:6}}
-                  >
-                    {model.nodes.map((n, idx) => (
-                      <option key={n.id} value={n.id}>
-                        {idx}: {n.id.slice(0, 6)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label style={{fontSize:12}}>
-                  Node B
-                  <select
-                    value={memberInputB}
-                    onChange={(e)=> setMemberInputB(e.target.value)}
-                    style={{marginLeft:6}}
-                  >
-                    {model.nodes.map((n, idx) => (
-                      <option key={n.id} value={n.id}>
-                        {idx}: {n.id.slice(0, 6)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <div style={{display:'flex', alignItems:'center', gap:10, marginTop:8, flexWrap:'wrap'}}>
+                  <div style={{fontWeight:600}}>Add Member</div>
+                  <div style={{fontSize:12, color:'#94a3b8'}}>Units: m</div>
+                  <label style={{fontSize:12}}>
+                    Node A
+                    <select
+                      value={memberInputA}
+                      onChange={(e)=> setMemberInputA(e.target.value)}
+                      style={{marginLeft:6}}
+                    >
+                      {model.nodes.map((n, idx) => (
+                        <option key={n.id} value={n.id}>
+                          Node {idx} ({Number(n.position?.x || 0).toFixed(2)}, {Number(n.position?.y || 0).toFixed(2)}, {Number(n.position?.z || 0).toFixed(2)})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{fontSize:12}}>
+                    Node B
+                    <select
+                      value={memberInputB}
+                      onChange={(e)=> setMemberInputB(e.target.value)}
+                      style={{marginLeft:6}}
+                    >
+                      {model.nodes.map((n, idx) => (
+                        <option key={n.id} value={n.id}>
+                          Node {idx} ({Number(n.position?.x || 0).toFixed(2)}, {Number(n.position?.y || 0).toFixed(2)}, {Number(n.position?.z || 0).toFixed(2)})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 <button
                   onClick={handleAddMemberFromInput}
                   disabled={!memberInputA || !memberInputB || memberInputA === memberInputB}
@@ -1236,12 +1263,12 @@ export default function App(){
                     </div>
                   </div>
                 )}
-                {selectedMemberIds.length > 0 && (
-                  <>
-                    <div style={{marginTop:8, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
-                      <div style={{fontSize:12, color:'#475569'}}>
-                        Selected members: {selectedMemberIds.length}
-                      </div>
+              {selectedMemberIds.length > 0 && (
+                <>
+                  <div style={{marginTop:8, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
+                    <div style={{fontSize:12, color:'#475569'}}>
+                      Selected members: {selectedMemberIds.length}
+                    </div>
                       <button
                         onClick={applyDetailingToSelectedMembers}
                         disabled={!detailingState}
@@ -1268,9 +1295,9 @@ export default function App(){
                           </button>
                         </div>
                       ))}
-                    </div>
-                  </>
-                )}
+                  </div>
+                </>
+              )}
                 {detailTargetSection && (
                   <div style={{marginTop:8, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
                     <div style={{fontSize:12, color:'#475569'}}>
@@ -1300,48 +1327,6 @@ export default function App(){
               </>
             )}
             {showModelingPanel && (
-            <div style={{display:'flex', alignItems:'center', gap:10, marginTop:10}}>
-              <div style={{fontWeight:600}}>Footing</div>
-              <label style={{fontSize:12}}>
-                B
-                <input
-                  type="number"
-                  step="0.1"
-                  value={footingSize.x}
-                  onChange={(e)=> setFootingSize(s => ({ ...s, x: Number(e.target.value) || 0 }))}
-                  style={{width:70, marginLeft:6}}
-                />
-              </label>
-              <label style={{fontSize:12}}>
-                D
-                <input
-                  type="number"
-                  step="0.1"
-                  value={footingSize.y}
-                  onChange={(e)=> setFootingSize(s => ({ ...s, y: Number(e.target.value) || 0 }))}
-                  style={{width:70, marginLeft:6}}
-                />
-              </label>
-              <label style={{fontSize:12}}>
-                L
-                <input
-                  type="number"
-                  step="0.1"
-                  value={footingSize.z}
-                  onChange={(e)=> setFootingSize(s => ({ ...s, z: Number(e.target.value) || 0 }))}
-                  style={{width:70, marginLeft:6}}
-                />
-              </label>
-              <button
-                onClick={addFootingToSelected}
-                disabled={model.selection?.type !== 'node'}
-                style={{padding:'6px 10px'}}
-              >
-                Add Footing to Selected Node
-              </button>
-            </div>
-            )}
-            {showModelingPanel && (
             <div style={{display:'flex', alignItems:'center', gap:10, marginTop:10, flexWrap:'wrap'}}>
               <div style={{fontWeight:600}}>Levels & NGL</div>
               <label style={{fontSize:12}}>
@@ -1360,6 +1345,15 @@ export default function App(){
                   type="checkbox"
                   checked={!!model.showVerticalGrid}
                   onChange={(e)=> applyModel({ ...model, showVerticalGrid: e.target.checked })}
+                  style={{marginLeft:6}}
+                />
+              </label>
+              <label style={{fontSize:12}}>
+                Show Grid
+                <input
+                  type="checkbox"
+                  checked={!!model.showGrid}
+                  onChange={(e)=> applyModel({ ...model, showGrid: e.target.checked })}
                   style={{marginLeft:6}}
                 />
               </label>
@@ -1483,6 +1477,11 @@ export default function App(){
                   <option value="steel" disabled={sectionForm.category === 'pedestal' || sectionForm.category === 'footing'}>Steel</option>
                 </select>
               </label>
+              {sectionForm.material === 'steel' && aiscShapes.length === 0 && (
+                <div style={{fontSize:12, color:'#b45309'}}>
+                  No AISC data loaded. Start backend on `http://localhost:4000`.
+                </div>
+              )}
               <label style={{fontSize:12}}>
                 Units
                 <select
@@ -1647,12 +1646,62 @@ export default function App(){
                 ))}
               </div>
             )}
+            {showSectionsPanel && (
+            <div style={{display:'flex', alignItems:'center', gap:10, marginTop:10}}>
+              <div style={{fontWeight:600}}>Footing</div>
+              <label style={{fontSize:12}}>
+                B
+                <input
+                  type="number"
+                  step="0.1"
+                  value={footingSize.x}
+                  onChange={(e)=> setFootingSize(s => ({ ...s, x: Number(e.target.value) || 0 }))}
+                  style={{width:70, marginLeft:6}}
+                />
+              </label>
+              <label style={{fontSize:12}}>
+                D
+                <input
+                  type="number"
+                  step="0.1"
+                  value={footingSize.y}
+                  onChange={(e)=> setFootingSize(s => ({ ...s, y: Number(e.target.value) || 0 }))}
+                  style={{width:70, marginLeft:6}}
+                />
+              </label>
+              <label style={{fontSize:12}}>
+                L
+                <input
+                  type="number"
+                  step="0.1"
+                  value={footingSize.z}
+                  onChange={(e)=> setFootingSize(s => ({ ...s, z: Number(e.target.value) || 0 }))}
+                  style={{width:70, marginLeft:6}}
+                />
+              </label>
+              <button
+                onClick={addFootingToSelected}
+                disabled={model.selection?.type !== 'node'}
+                style={{padding:'6px 10px'}}
+              >
+                Add Footing to Selected Node
+              </button>
+            </div>
+            )}
             {(showModelingPanel || showDetailingPanel || showSectionsPanel) && (
               <div style={{display:'flex', alignItems:'center', gap:10, marginTop:12, flexWrap:'wrap'}}>
                 <div style={{fontWeight:600}}>Selection</div>
                 <div style={{fontSize:12}}>
                   {model.selection?.type ? `${model.selection.type} ${model.selection.id?.slice(0,6)}` : 'None'}
                 </div>
+                {model.selection?.type && (
+                  <button
+                    onClick={clearSelection}
+                    style={{padding:'4px 8px'}}
+                  >
+                    Unselect
+                  </button>
+                )}
                 {model.selection?.type === 'member' && (
                   <>
                     <label style={{fontSize:12}}>
@@ -1838,6 +1887,7 @@ export default function App(){
                 initialModel={initialModelRef.current}
                 floors={model.floors}
                 nglElevation={model.ngl}
+                showGrid={!!model.showGrid}
                 showVerticalGrid={!!model.showVerticalGrid}
                 snapToLevel={!!model.snapToLevel}
                 activeLevelId={model.activeLevelId}

@@ -31,6 +31,7 @@ const ThreeScene = forwardRef((props, ref) => {
   const selectedFootingRef = useRef(null)
   const selectedRef = useRef(null)
   const selectedMembersRef = useRef(new Set())
+  const setRotateModeRef = useRef(null)
   const addNodeRef = useRef(null)
   const addMemberRef = useRef(null)
   const addFootingRef = useRef(null)
@@ -180,11 +181,38 @@ const ThreeScene = forwardRef((props, ref) => {
       if (m.mesh && m.mesh.parent) m.mesh.parent.remove(m.mesh)
       membersRef.current.splice(mi, 1)
       selectedMembersRef.current.delete(memberId)
-      selectedMemberRef.current = null
+      if (selectedMemberRef.current && selectedMemberRef.current.id === memberId) {
+        selectedMemberRef.current = null
+      }
       refreshMemberVisuals()
-      props.onSelectionChange && props.onSelectionChange({ type: null, id: null })
+      props.onSelectionChange && props.onSelectionChange({ type: null, id: null, multi: [] })
       emitSceneChange()
       return true
+    },
+    clearSelection: () => {
+      if (selectedRef.current) {
+        selectedRef.current.material?.emissive?.setHex?.(0x000000)
+        selectedRef.current = null
+      }
+      if (selectedMemberRef.current) {
+        selectedMemberRef.current.line.material &&
+          selectedMemberRef.current.line.material.color.setHex(0x333333)
+        selectedMemberRef.current.mesh?.material?.emissive?.setHex?.(0x000000)
+        selectedMemberRef.current = null
+      }
+      if (selectedFootingRef.current) {
+        selectedFootingRef.current.mesh.material?.emissive?.setHex?.(0x000000)
+        selectedFootingRef.current = null
+      }
+      selectedMembersRef.current.clear()
+      refreshMemberVisuals()
+      setSelectedId(null)
+      props.onSelectionChange && props.onSelectionChange({ type: null, id: null, multi: [] })
+    },
+    setRotateMode: (enabled) => {
+      if (setRotateModeRef.current) {
+        setRotateModeRef.current(!!enabled)
+      }
     },
     setMemberSelection: (ids) => {
       const list = Array.isArray(ids) ? ids : []
@@ -288,9 +316,9 @@ const ThreeScene = forwardRef((props, ref) => {
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.target.set(0, 0, 0)
     controls.mouseButtons = {
-      LEFT: THREE.MOUSE.NONE,
-      MIDDLE: THREE.MOUSE.ROTATE,
-      RIGHT: THREE.MOUSE.DOLLY,
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.PAN,
     }
     controls.enableRotate = false
     controls.update()
@@ -311,6 +339,16 @@ const ThreeScene = forwardRef((props, ref) => {
       0x888888
     )
     grid.userData.isGrid = true
+    grid.visible = !!props.showGrid
+    if (Array.isArray(grid.material)) {
+      grid.material.forEach((m) => {
+        m.transparent = true
+        m.opacity = 0.35
+      })
+    } else if (grid.material) {
+      grid.material.transparent = true
+      grid.material.opacity = 0.35
+    }
     scene.add(grid)
 
     const axes = new THREE.AxesHelper(5)
@@ -609,21 +647,27 @@ const ThreeScene = forwardRef((props, ref) => {
     }
 
     function onPointerDown(ev) {
-      if (ev.button === 1) {
-        setRotateMode(true)
+      if (rotateModeRef.current) {
         return
       }
-      if (rotateModeRef.current && ev.button === 0) {
-        setRotateMode(false)
-      }
       const hit = pickNode(ev)
-      if (!hit) return
+      if (!hit) {
+        if (ref && ref.current && typeof ref.current.clearSelection === 'function') {
+          ref.current.clearSelection()
+        } else {
+          selectedMembersRef.current.clear()
+          refreshMemberVisuals()
+          setSelectedId(null)
+          props.onSelectionChange && props.onSelectionChange({ type: null, id: null, multi: [] })
+        }
+        return
+      }
 
       if (hit.type === 'node') {
         const node = hit.object
-        dragTarget = node
-        dragging = true
-        dragStart = node.position.clone()
+        dragTarget = null
+        dragging = false
+        dragStart = null
 
         selectedMembersRef.current.clear()
         refreshMemberVisuals()
@@ -822,10 +866,15 @@ const ThreeScene = forwardRef((props, ref) => {
 
     window.addEventListener('keydown', onKeyDown)
 
+    function onContextMenu(ev) {
+      ev.preventDefault()
+    }
+
     renderer.domElement.addEventListener('dblclick', onDoubleClick)
     renderer.domElement.addEventListener('pointerdown', onPointerDown)
     renderer.domElement.addEventListener('pointermove', onPointerMove)
     renderer.domElement.addEventListener('pointerup', onPointerUp)
+    renderer.domElement.addEventListener('contextmenu', onContextMenu)
 
     function clearSceneObjects() {
       nodesRef.current.forEach((n) => n.parent && n.parent.remove(n))
@@ -1374,6 +1423,7 @@ const ThreeScene = forwardRef((props, ref) => {
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
+      renderer.domElement.removeEventListener('contextmenu', onContextMenu)
       window.removeEventListener('keydown', onKeyDown)
 
       controls.dispose()
@@ -1381,7 +1431,7 @@ const ThreeScene = forwardRef((props, ref) => {
 
       if (el.contains(renderer.domElement)) el.removeChild(renderer.domElement)
     }
-  }, [snapEnabled, gridSize, gridDivisions, tool, props.floors, props.nglElevation, props.showVerticalGrid, props.snapToLevel, props.activeLevelId, props.axisLock, props.constrainMembers, props.sections])
+  }, [snapEnabled, gridSize, gridDivisions, tool, props.floors, props.nglElevation, props.showGrid, props.showVerticalGrid, props.snapToLevel, props.activeLevelId, props.axisLock, props.constrainMembers])
 
   useEffect(() => {
     if (props.model && updateMemberOffsetsRef.current) {
@@ -1531,8 +1581,3 @@ const ThreeScene = forwardRef((props, ref) => {
 })
 
 export default ThreeScene
-    function setRotateMode(enabled) {
-      rotateModeRef.current = enabled
-      controls.enableRotate = enabled
-      renderer.domElement.style.cursor = enabled ? 'grab' : 'default'
-    }

@@ -21,6 +21,7 @@ export function createEmptyModel() {
     activeLevelId: null,
     axisLock: 'none',
     constrainMembers: false,
+    showGrid: true,
     showVerticalGrid: true,
     selection: { type: null, id: null },
   }
@@ -39,6 +40,7 @@ export function normalizeModel(raw) {
     activeLevelId: typeof raw.activeLevelId === 'string' ? raw.activeLevelId : null,
     axisLock: raw.axisLock === 'x' || raw.axisLock === 'y' || raw.axisLock === 'z' ? raw.axisLock : 'none',
     constrainMembers: typeof raw.constrainMembers === 'boolean' ? raw.constrainMembers : false,
+    showGrid: typeof raw.showGrid === 'boolean' ? raw.showGrid : true,
     showVerticalGrid: typeof raw.showVerticalGrid === 'boolean' ? raw.showVerticalGrid : true,
     selection: normalizeSelection(raw.selection),
   }
