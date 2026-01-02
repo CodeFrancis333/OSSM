@@ -323,6 +323,14 @@ const ThreeScene = forwardRef((props, ref) => {
     controls.enableRotate = false
     controls.update()
 
+    function setRotateMode(enabled) {
+      const next = !!enabled
+      rotateModeRef.current = next
+      controls.enableRotate = next
+      renderer.domElement.style.cursor = next ? 'grab' : 'default'
+    }
+    setRotateModeRef.current = setRotateMode
+
     // Lights
     const light = new THREE.DirectionalLight(0xffffff, 0.9)
     light.position.set(10, 20, 10)
@@ -1201,13 +1209,23 @@ const ThreeScene = forwardRef((props, ref) => {
 
     function updateMemberMeshes(model, sectionsById) {
       if (!model) return
+      const viewMode = props.viewMode || 'geometry'
+      const forceLines = viewMode === 'lines'
+      const forceEdges = viewMode === 'edges'
+      const forceRebars = viewMode === 'rebars'
       const membersById = Object.fromEntries((model.members || []).map((m) => [m.id, m]))
       membersRef.current.forEach((m) => {
         const meta = membersById[m.id]
         const section = meta?.sectionId ? sectionsById[meta.sectionId] : null
         const dims = getMemberSectionDims(section)
         const preview = meta?.preview || 'shape'
-        if (!dims || preview === 'line') {
+        if (forceRebars) {
+          if (m.mesh) m.mesh.visible = false
+          m.line.visible = false
+          m.sectionDims = null
+          return
+        }
+        if (!dims || preview === 'line' || forceLines) {
           if (m.mesh) m.mesh.visible = false
           m.line.visible = true
           m.sectionDims = null
@@ -1248,6 +1266,7 @@ const ThreeScene = forwardRef((props, ref) => {
         if (!m.mesh) {
           const mat = new THREE.MeshStandardMaterial({
             color: section.material === 'steel' ? 0x5b6777 : 0x8b9bb0,
+            wireframe: forceEdges,
           })
           let geom = null
           if (wDims) geom = buildWSectionGeometry(wDims)
@@ -1274,7 +1293,13 @@ const ThreeScene = forwardRef((props, ref) => {
           else geom = new THREE.BoxGeometry(1, dims.h, dims.b)
           m.mesh.geometry = geom
           m.mesh.userData = { baseLen: 1, profileKey }
-          m.mesh.material && (m.mesh.material.color.set(section.material === 'steel' ? 0x5b6777 : 0x8b9bb0))
+          if (m.mesh.material) {
+            m.mesh.material.color.set(section.material === 'steel' ? 0x5b6777 : 0x8b9bb0)
+            m.mesh.material.wireframe = forceEdges
+          }
+        }
+        if (m.mesh?.material) {
+          m.mesh.material.wireframe = forceEdges
         }
         m.mesh.visible = true
         m.line.visible = false
@@ -1438,6 +1463,30 @@ const ThreeScene = forwardRef((props, ref) => {
       updateMemberOffsetsRef.current(props.model)
     }
   }, [props.model])
+
+  useEffect(() => {
+    if (props.model && updateMemberOffsetsRef.current) {
+      updateMemberOffsetsRef.current(props.model)
+    }
+  }, [props.viewMode])
+
+  useEffect(() => {
+    const viewMode = props.viewMode || 'geometry'
+    const showFootings = viewMode === 'geometry' || viewMode === 'edges'
+    const wire = viewMode === 'edges'
+    footingsRef.current.forEach((f) => {
+      if (f.mesh) {
+        f.mesh.visible = !!showFootings
+        if (f.mesh.material) {
+          f.mesh.material.wireframe = wire
+        }
+      }
+    })
+    const showNodes = viewMode !== 'rebars'
+    nodesRef.current.forEach((n) => {
+      n.visible = showNodes
+    })
+  }, [props.viewMode])
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>

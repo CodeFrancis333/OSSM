@@ -35,7 +35,9 @@ export function normalizeModel(raw) {
     footings: Array.isArray(raw.footings) ? raw.footings : [],
     floors: Array.isArray(raw.floors) ? raw.floors : [],
     ngl: typeof raw.ngl === 'number' ? raw.ngl : 0,
-    sections: Array.isArray(raw.sections) ? raw.sections : [],
+    sections: Array.isArray(raw.sections)
+      ? raw.sections.map((s) => ({ ...s, material: s?.material || 'rc' }))
+      : [],
     snapToLevel: typeof raw.snapToLevel === 'boolean' ? raw.snapToLevel : false,
     activeLevelId: typeof raw.activeLevelId === 'string' ? raw.activeLevelId : null,
     axisLock: raw.axisLock === 'x' || raw.axisLock === 'y' || raw.axisLock === 'z' ? raw.axisLock : 'none',

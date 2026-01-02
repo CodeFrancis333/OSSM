@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
 import * as THREE from 'three'
-import { FiBox, FiEdit3, FiLayers, FiClipboard } from 'react-icons/fi'
 import ThreeScene from './components/ThreeScene'
 import SectionEditor from './components/SectionEditor'
 import BOMPanel from './components/BOMPanel'
@@ -39,31 +38,35 @@ export default function App(){
     category: 'beam',
     material: 'rc',
     shape: 'rect',
+    centroid: 'center',
     b: 0.3,
     h: 0.5,
-    centroid: 'center',
+    l: 0.3,
     steelType: 'W',
     steelShape: '',
   })
   const [detailingState, setDetailingState] = useState(null)
+  const [detailTargetSectionId, setDetailTargetSectionId] = useState('')
+  const [validationReport, setValidationReport] = useState(null)
   const [dupOffset, setDupOffset] = useState({ x: 1, y: 0, z: 0 })
   const [treeOpen, setTreeOpen] = useState(true)
   const [activeTab, setActiveTab] = useState('modeling')
-  const [panelOpen, setPanelOpen] = useState(true)
-  const [nodeInput, setNodeInput] = useState({ x: 0, y: 0, z: 0 })
-  const [memberInputA, setMemberInputA] = useState('')
-  const [memberInputB, setMemberInputB] = useState('')
+  const [viewMode, setViewMode] = useState('geometry')
   const [rotateEnabled, setRotateEnabled] = useState(false)
+  const [nodeInput, setNodeInput] = useState({ x: 0, y: 0, z: 0 })
   const [lineDrawMode, setLineDrawMode] = useState(false)
   const [lineStartId, setLineStartId] = useState(null)
+  const [memberForm, setMemberForm] = useState({ a: '', b: '' })
+  const [footingSectionId, setFootingSectionId] = useState('')
+  const [aiscUnits, setAiscUnits] = useState('metric')
+  const [aiscType, setAiscType] = useState('W')
+  const [aiscShapes, setAiscShapes] = useState([])
+  const [aiscLoading, setAiscLoading] = useState(false)
+  const [aiscError, setAiscError] = useState('')
   const [firebaseUid, setFirebaseUid] = useState(null)
   const [isPremium, setIsPremium] = useState(false)
   const [customShapes, setCustomShapes] = useState([])
   const [customShapeId, setCustomShapeId] = useState('')
-  const [aiscShapes, setAiscShapes] = useState([])
-  const [aiscUnits, setAiscUnits] = useState('metric')
-  const [detailTargetSectionId, setDetailTargetSectionId] = useState(null)
-  const [selectedMemberIds, setSelectedMemberIds] = useState([])
   const devUserDocEnabled = import.meta.env.VITE_DEV_USER_DOC === '1'
 
   function addBomLine(line){
@@ -74,6 +77,7 @@ export default function App(){
   const threeRef = useRef(null)
   const importRef = useRef(null)
   const pendingMemberMetaRef = useRef({})
+  const pendingFootingMetaRef = useRef({})
   const [model, setModel] = useState(() => loadModel() || createEmptyModel())
   const initialModelRef = useRef(model)
   const [rebarLib, setRebarLib] = useState({})
@@ -100,11 +104,14 @@ export default function App(){
           rotation: pendingMeta?.rotation || prev?.rotation || { x: 0, y: 0, z: 0 },
         }
       })
+      const pendingFootings = pendingFootingMetaRef.current || {}
       const footings = (payload.footings || []).map((f) => {
         const prev = existingFootings[f.id]
+        const pendingFooting = pendingFootings[f.id]
+        if (pendingFooting) delete pendingFootings[f.id]
         return {
           ...f,
-          sectionId: prev?.sectionId || null,
+          sectionId: pendingFooting?.sectionId || prev?.sectionId || null,
         }
       })
       return {
@@ -118,11 +125,6 @@ export default function App(){
 
   function handleSelectionChange(selection){
     setModel(m => setSelection(m, selection))
-    if (selection?.type === 'member' && Array.isArray(selection.multi)) {
-      setSelectedMemberIds(selection.multi)
-    } else if (!selection || selection.type !== 'member') {
-      setSelectedMemberIds([])
-    }
     if (!selection || selection.type !== 'node' || !lineDrawMode) return
     if (!lineStartId) {
       setLineStartId(selection.id)
@@ -135,31 +137,6 @@ export default function App(){
     setLineStartId(null)
   }
 
-  useEffect(() => {
-    if (model.selection?.type !== 'node') return
-    const node = model.nodes.find((n) => n.id === model.selection.id)
-    if (!node) return
-    setNodeInput({
-      x: node.position.x,
-      y: node.position.y,
-      z: node.position.z,
-    })
-  }, [model.selection, model.nodes])
-
-  useEffect(() => {
-    const ids = model.nodes.map((n) => n.id)
-    if (ids.length === 0) {
-      setMemberInputA('')
-      setMemberInputB('')
-      return
-    }
-    setMemberInputA((prev) => (ids.includes(prev) ? prev : ids[0]))
-    setMemberInputB((prev) => {
-      if (ids.includes(prev)) return prev
-      return ids[1] || ids[0]
-    })
-  }, [model.nodes])
-
   useEffect(()=>{
     async function fetchLib(){
       try{
@@ -169,19 +146,6 @@ export default function App(){
     }
     fetchLib()
   }, [])
-
-  useEffect(() => {
-    async function fetchAisc(){
-      try{
-        const res = await fetch(`http://localhost:4000/api/aisc?units=${aiscUnits}`)
-        if (!res.ok) return
-        const json = await res.json()
-        setAiscUnits(String(json.units || 'metric'))
-        setAiscShapes(Array.isArray(json.shapes) ? json.shapes : [])
-      }catch(e){ /* ignore */ }
-    }
-    fetchAisc()
-  }, [aiscUnits])
 
   useEffect(() => {
     if (!hasConfig || !auth) return
@@ -210,27 +174,6 @@ export default function App(){
   }, [firebaseUid])
 
   useEffect(() => {
-    if (!aiscShapes.length) return
-    const types = Array.from(new Set(aiscShapes.map((s) => s.type))).filter(Boolean).sort()
-    if (!types.length) return
-    setSectionForm((prev) => {
-      const steelType = types.includes(prev.steelType) ? prev.steelType : types[0]
-      const shapesForType = aiscShapes.filter((s) => s.type === steelType)
-      const steelShape = prev.steelShape && shapesForType.find((s) => s.label === prev.steelShape)
-        ? prev.steelShape
-        : (shapesForType[0]?.label || '')
-      return { ...prev, steelType, steelShape }
-    })
-  }, [aiscShapes])
-
-  useEffect(() => {
-    if (activeTab !== 'modeling') {
-      setLineDrawMode(false)
-      setLineStartId(null)
-    }
-  }, [activeTab])
-
-  useEffect(() => {
     if (!db || !firebaseUid) return
     const userRef = doc(db, 'users', firebaseUid)
     getDoc(userRef).then((snap) => {
@@ -247,38 +190,61 @@ export default function App(){
     saveModel(model)
   }, [model])
 
+  useEffect(() => {
+    if (threeRef.current && typeof threeRef.current.setRotateMode === 'function') {
+      threeRef.current.setRotateMode(rotateEnabled)
+    }
+  }, [rotateEnabled])
+
+  useEffect(() => {
+    if (sectionForm.material !== 'steel') return
+    let cancelled = false
+    setAiscLoading(true)
+    setAiscError('')
+    fetch(`http://localhost:4000/api/aisc?units=${encodeURIComponent(aiscUnits)}&type=${encodeURIComponent(aiscType)}`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('aisc fetch failed'))))
+      .then((data) => {
+        if (cancelled) return
+        setAiscShapes(Array.isArray(data.shapes) ? data.shapes : [])
+      })
+      .catch(() => {
+        if (cancelled) return
+        setAiscShapes([])
+        setAiscError('AISC data unavailable. Start backend on http://localhost:4000.')
+      })
+      .finally(() => {
+        if (!cancelled) setAiscLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sectionForm.material, aiscUnits, aiscType])
+
+  useEffect(() => {
+    if (sectionForm.material === 'steel' && sectionForm.category === 'pedestal') {
+      setSectionForm((s) => ({ ...s, category: 'column' }))
+    }
+    if (sectionForm.material === 'steel' && sectionForm.category === 'footing') {
+      setSectionForm((s) => ({ ...s, category: 'beam' }))
+    }
+  }, [sectionForm.material, sectionForm.category])
+
+  useEffect(() => {
+    if (detailTargetSectionId) return
+    const firstRc = model.sections.find((s) => s.material !== 'steel')
+    if (firstRc) setDetailTargetSectionId(firstRc.id)
+  }, [model.sections, detailTargetSectionId])
+
+  useEffect(() => {
+    if (activeTab !== 'modeling' && rotateEnabled) {
+      setRotateEnabled(false)
+    }
+  }, [activeTab, rotateEnabled])
+
   function applyModel(nextModel){
     setModel(nextModel)
     if (threeRef.current && typeof threeRef.current.setModel === 'function'){
       threeRef.current.setModel(nextModel)
-    }
-  }
-
-  function handleTabClick(tabKey){
-    if (activeTab === tabKey) {
-      setPanelOpen((prev) => !prev)
-      return
-    }
-    setActiveTab(tabKey)
-    setPanelOpen(tabKey !== 'bom')
-  }
-
-  function toggleRotateMode(){
-    setRotateEnabled((prev) => {
-      const next = !prev
-      if (threeRef.current && typeof threeRef.current.setRotateMode === 'function') {
-        threeRef.current.setRotateMode(next)
-      }
-      return next
-    })
-  }
-
-  function clearSelection(){
-    updateMultiSelection([])
-    if (threeRef.current && typeof threeRef.current.clearSelection === 'function') {
-      threeRef.current.clearSelection()
-    } else {
-      applyModel(setSelection(model, { type: null, id: null }))
     }
   }
 
@@ -322,6 +288,32 @@ export default function App(){
     threeRef.current.addFooting(nodeId, footingSize)
   }
 
+  function assignFootingSectionToSelected(){
+    if (!model.selection || model.selection.type !== 'node') return
+    const section = mergedSections.find((s) => s.id === footingSectionId)
+    if (!section) return
+    const dims = section.dims || {}
+    const size = {
+      x: Number(dims.b) || footingSize.x,
+      y: Number(dims.h) || footingSize.y,
+      z: Number(dims.l) || Number(dims.b) || footingSize.z,
+    }
+    if (!threeRef.current || typeof threeRef.current.addFooting !== 'function') return
+    const footingId = threeRef.current.addFooting(model.selection.id, size)
+    if (footingId) {
+      pendingFootingMetaRef.current[footingId] = { sectionId: section.id }
+    }
+  }
+
+  function clearSelection(){
+    if (threeRef.current && typeof threeRef.current.clearSelection === 'function') {
+      threeRef.current.clearSelection()
+    } else {
+      setModel(m => setSelection(m, { type: null, id: null }))
+    }
+    setLineStartId(null)
+  }
+
   function applyTransform({ translate, rotate }){
     let next = model
     if (translate) next = translateSelection(next, next.selection, translate)
@@ -338,58 +330,11 @@ export default function App(){
     threeRef.current.addNode(new THREE.Vector3(x, y, z))
   }
 
-  function handleUpdateSelectedNode(){
-    if (model.selection?.type !== 'node') return
-    const x = Number(nodeInput.x) || 0
-    const y = Number(nodeInput.y) || 0
-    const z = Number(nodeInput.z) || 0
-    const next = {
-      ...model,
-      nodes: model.nodes.map((n) => (
-        n.id === model.selection.id ? { ...n, position: { x, y, z } } : n
-      )),
-    }
-    applyModel(next)
-  }
-
-  function handleDeleteSelectedNode(){
-    if (model.selection?.type !== 'node') return
-    if (threeRef.current && typeof threeRef.current.deleteNode === 'function'){
-      threeRef.current.deleteNode(model.selection.id)
-    }
-  }
-
-  function handleAddMemberFromInput(){
+  function handleAddMemberFromForm(){
     if (!threeRef.current || typeof threeRef.current.addMember !== 'function') return
-    if (!memberInputA || !memberInputB || memberInputA === memberInputB) return
-    threeRef.current.addMember(memberInputA, memberInputB)
-  }
-
-  function handleDeleteSelectedMember(){
-    if (model.selection?.type !== 'member') return
-    if (threeRef.current && typeof threeRef.current.deleteMember === 'function'){
-      threeRef.current.deleteMember(model.selection.id)
-    }
-  }
-
-  function handleUpdateNodeInline(nodeId, axis, value){
-    const v = Number(value)
-    if (!Number.isFinite(v)) return
-    const next = {
-      ...model,
-      nodes: model.nodes.map((n) => {
-        if (n.id !== nodeId) return n
-        return {
-          ...n,
-          position: {
-            x: axis === 'x' ? v : n.position.x,
-            y: axis === 'y' ? v : n.position.y,
-            z: axis === 'z' ? v : n.position.z,
-          },
-        }
-      }),
-    }
-    applyModel(next)
+    if (!memberForm.a || !memberForm.b || memberForm.a === memberForm.b) return
+    threeRef.current.addMember(memberForm.a, memberForm.b)
+    setMemberForm({ a: '', b: '' })
   }
 
   function toggleLineDraw(){
@@ -410,74 +355,62 @@ export default function App(){
   }
 
   function handleRemoveFloor(id){
-    const floor = model.floors.find((f) => f.id === id)
     applyModel(removeFloor(model, id))
-    if (floor) scheduleUndo({ type: 'floor', floor })
-  }
-
-  function getAiscDimsMeters(shape){
-    if (!shape || !shape.dims) return { b: 0, h: 0 }
-    const rawOD = shape.dims.OD ?? shape.dims.od ?? 0
-    const rawB = shape.dims.bf ?? shape.dims.b ?? shape.dims.B ?? rawOD ?? 0
-    const rawH = shape.dims.d ?? shape.dims.h ?? shape.dims.Ht ?? shape.dims.H ?? rawOD ?? 0
-    const scale = aiscUnits === 'metric' ? 0.001 : 0.0254
-    return {
-      b: Number(rawB) * scale,
-      h: Number(rawH) * scale,
-    }
   }
 
   function handleAddSection(){
     const name = sectionForm.name || `${sectionForm.category} ${model.sections.length + 1}`
     if (sectionForm.material === 'steel') {
-      const shape = aiscShapes.find((s) => s.label === sectionForm.steelShape)
-      if (!shape) return
-      const dims = getAiscDimsMeters(shape)
+      const shape = aiscShapes.find((s) => s.label === sectionForm.steelShape || s.std === sectionForm.steelShape)
+      if (!shape || !shape.dims) return
+      const b = Number(shape.dims.bf ?? shape.dims.b ?? shape.dims.B) || 0
+      const h = Number(shape.dims.d ?? shape.dims.Ht ?? shape.dims.h) || 0
+      const dims = { b, h }
       applyModel(addSection(model, {
-        name,
+        name: name || shape.label || 'Steel Section',
         category: sectionForm.category,
         material: 'steel',
         shape: 'aisc',
         dims,
-        steelType: shape.type,
-        steelShape: shape.label,
+        steelType: aiscType,
+        steelShape: shape.label || sectionForm.steelShape,
         aiscUnits,
-        aiscDims: shape.dims || {},
+        aiscDims: shape.dims,
       }))
-    } else {
-      const dims = { b: Number(sectionForm.b) || 0, h: Number(sectionForm.h) || 0 }
-      applyModel(addSection(model, {
-        name,
-        category: sectionForm.category,
-        material: 'rc',
-        shape: sectionForm.shape,
-        dims,
-        centroid: sectionForm.centroid,
-      }))
+      setSectionForm(s => ({ ...s, name: '' }))
+      return
     }
+    const lVal = Number(sectionForm.l) || Number(sectionForm.b) || 0
+    const dims = { b: Number(sectionForm.b) || 0, h: Number(sectionForm.h) || 0, l: lVal }
+    applyModel(addSection(model, {
+      name,
+      category: sectionForm.category,
+      material: 'rc',
+      shape: sectionForm.shape,
+      centroid: sectionForm.centroid,
+      dims,
+    }))
     setSectionForm(s => ({ ...s, name: '' }))
   }
 
   async function handleSaveCustomShape(){
     if (!hasConfig || !db || !firebaseUid) return
-    if (sectionForm.material !== 'rc') {
-      alert('Custom shapes are for reinforced concrete sections only.')
-      return
-    }
     if (!isPremium) {
       alert('Custom shapes are a premium feature.')
       return
     }
+    if (sectionForm.material === 'steel') {
+      alert('Custom steel shapes are not supported yet.')
+      return
+    }
     const name = sectionForm.name || `${sectionForm.category} ${customShapes.length + 1}`
-    const dims = { b: Number(sectionForm.b) || 0, h: Number(sectionForm.h) || 0 }
+    const dims = { b: Number(sectionForm.b) || 0, h: Number(sectionForm.h) || 0, l: Number(sectionForm.l) || 0 }
     await addDoc(collection(db, 'custom_shapes'), {
       uid: firebaseUid,
       name,
       category: sectionForm.category,
-      material: sectionForm.material,
       shape: sectionForm.shape,
       dims,
-      centroid: sectionForm.centroid,
       units: 'metric',
       createdAt: serverTimestamp(),
     })
@@ -496,13 +429,14 @@ export default function App(){
     setSectionForm({
       name: item.name || '',
       category: item.category || 'beam',
-      material: item.material || 'rc',
+      material: 'rc',
       shape: item.shape || 'rect',
+      centroid: 'center',
       b: item.dims?.b || 0.3,
       h: item.dims?.h || 0.5,
-      centroid: item.centroid || 'center',
-      steelType: item.steelType || 'W',
-      steelShape: item.steelShape || '',
+      l: item.dims?.l || item.dims?.b || 0.3,
+      steelType: 'W',
+      steelShape: '',
     })
     setCustomShapeId('')
   }
@@ -517,58 +451,45 @@ export default function App(){
       normalize.sectionId = null
       normalize.align = 'center'
     }
-    if ('sectionId' in patch && patch.sectionId) {
-      const customById = Object.fromEntries(customShapes.map((s) => [`custom-${s.id}`, s]))
-      const nextSection = customById[patch.sectionId] || model.sections.find((s) => s.id === patch.sectionId)
-      if (nextSection?.centroid) normalize.align = nextSection.centroid
-      const existing = model.members.find((m) => m.id === memberId)
-      if (!('preview' in patch) && !existing?.preview) {
-        normalize.preview = 'shape'
-      }
-    }
     applyModel({
       ...model,
       members: model.members.map((m) => (m.id === memberId ? { ...m, ...normalize } : m)),
     })
   }
 
-  function applyDetailingToMember(){
-    if (!detailingState || model.selection?.type !== 'member') return
-    const memberId = model.selection.id
-    updateMemberMeta(memberId, { detailing: detailingState })
-  }
-
-  function applyDetailingToTargetSection(){
+  function applyDetailingToSection(){
     if (!detailingState || !detailTargetSectionId) return
+    const target = model.sections.find((s) => s.id === detailTargetSectionId)
+    if (!target || target.material === 'steel') return
     applyModel({
       ...model,
+      sections: model.sections.map((s) => (s.id === detailTargetSectionId ? { ...s, detailing: detailingState } : s)),
       members: model.members.map((m) => (
         m.sectionId === detailTargetSectionId ? { ...m, detailing: detailingState } : m
       )),
-    })
-  }
-
-  function applyDetailingToSelectedMembers(){
-    if (!detailingState || !selectedMemberIds.length) return
-    applyModel({
-      ...model,
-      members: model.members.map((m) => (
-        selectedMemberIds.includes(m.id) ? { ...m, detailing: detailingState } : m
+      footings: model.footings.map((f) => (
+        f.sectionId === detailTargetSectionId ? { ...f, detailing: detailingState } : f
       )),
     })
   }
 
-  function updateMultiSelection(nextIds){
-    setSelectedMemberIds(nextIds)
-    if (threeRef.current && typeof threeRef.current.setMemberSelection === 'function') {
-      threeRef.current.setMemberSelection(nextIds)
-    }
-  }
-
-  function selectMembersBySection(sectionId){
-    if (!sectionId) return
-    const ids = model.members.filter((m) => m.sectionId === sectionId).map((m) => m.id)
-    updateMultiSelection(ids)
+  function validateDetailing(){
+    const missingSections = model.sections.filter((s) => s.material !== 'steel' && !s.detailing)
+    const missingMembers = model.members.filter((m) => {
+      const section = model.sections.find((s) => s.id === m.sectionId)
+      if (!section || section.material === 'steel') return false
+      return !m.detailing
+    })
+    const missingFootings = model.footings.filter((f) => {
+      const section = model.sections.find((s) => s.id === f.sectionId)
+      if (!section || section.material === 'steel') return false
+      return !f.detailing
+    })
+    setValidationReport({
+      missingSections,
+      missingMembers,
+      missingFootings,
+    })
   }
 
   function updateFootingMeta(footingId, patch){
@@ -919,9 +840,10 @@ export default function App(){
       const undo = { type:'footing', footing }
       scheduleUndo(undo)
     } else if (type === 'floor') {
-      const floor = model.floors.find((f) => f.id === id)
-      applyModel(removeFloor(model, id))
-      if (floor) scheduleUndo({ type:'floor', floor })
+      handleRemoveFloor(id)
+    }
+    if (model.selection?.id === id && model.selection?.type === type) {
+      clearSelection()
     }
     setPendingDelete(null)
   }
@@ -965,39 +887,28 @@ export default function App(){
         if (threeRef.current && typeof threeRef.current.addFooting === 'function'){
           threeRef.current.addFooting(f.nodeId, f.size)
         }
-      } else if (item.type === 'floor'){
-        applyModel(addFloor(model, item.floor))
       }
       return rest
     })
   }
 
   const mergedSections = [
-    ...model.sections.map((s) => ({
-      ...s,
-      material: s.material || 'rc',
-      centroid: s.centroid || 'center',
-    })),
+    ...model.sections,
     ...customShapes.map((s) => ({
       id: `custom-${s.id}`,
       name: s.name,
       category: s.category || 'beam',
-      material: s.material || 'rc',
+      material: 'rc',
       shape: s.shape || 'rect',
       dims: s.dims || { b: 0.3, h: 0.5 },
-      centroid: s.centroid || 'center',
-      steelType: s.steelType || null,
-      steelShape: s.steelShape || null,
       source: 'custom',
     })),
   ]
-  const detailTargetSection = detailTargetSectionId
-    ? mergedSections.find((s) => s.id === detailTargetSectionId)
-    : null
 
   const selectedMember = model.selection?.type === 'member'
     ? model.members.find((m) => m.id === model.selection.id)
     : null
+  const rcSections = model.sections.filter((s) => s.material !== 'steel')
   const selectedMemberSection = selectedMember?.sectionId
     ? mergedSections.find((s) => s.id === selectedMember.sectionId)
     : null
@@ -1014,13 +925,9 @@ export default function App(){
   const sectionPreviewScale = sectionPreview
     ? Math.max(sectionPreview.b, sectionPreview.h, 1)
     : 1
-  const aiscTypes = Array.from(new Set(aiscShapes.map((s) => s.type))).filter(Boolean).sort()
-  const filteredAiscShapes = sectionForm.steelType
-    ? aiscShapes.filter((s) => s.type === sectionForm.steelType)
-    : aiscShapes
-  const showTree = activeTab === 'modeling' || activeTab === 'detailing'
+  const showTree = activeTab === 'modeling'
   const showSectionEditor = activeTab === 'detailing'
-  const showScene = activeTab === 'modeling' || activeTab === 'detailing'
+  const showScene = activeTab === 'modeling'
   const showBOM = activeTab === 'bom'
   const showModelingPanel = activeTab === 'modeling'
   const showDetailingPanel = activeTab === 'detailing'
@@ -1055,32 +962,19 @@ export default function App(){
         </div>
       </header>
       <div style={{display:'flex', gap:8, padding:'8px 12px', borderBottom:'1px solid #e2e8f0', background:'#f8fafc'}}>
-        {[
-          { key: 'modeling', label: 'Modeling', icon: FiBox },
-          { key: 'detailing', label: 'Detailing', icon: FiEdit3 },
-          { key: 'sections', label: 'Sections', icon: FiLayers },
-          { key: 'bom', label: 'BOM', icon: FiClipboard },
-        ].map((tab) => (
+        {['modeling','detailing','sections','bom'].map((tab) => (
           <button
-            key={tab.key}
-            onClick={() => handleTabClick(tab.key)}
-            title={tab.label}
+            key={tab}
+            onClick={() => setActiveTab(tab)}
             style={{
-              minWidth:84,
-              height:36,
-              display:'inline-flex',
-              alignItems:'center',
-              justifyContent:'center',
-              gap:6,
-              fontWeight:600,
-              background: activeTab === tab.key ? '#0b5fff' : '#e2e8f0',
-              color: activeTab === tab.key ? '#fff' : '#111',
+              padding:'6px 10px',
+              background: activeTab === tab ? '#0b5fff' : '#e2e8f0',
+              color: activeTab === tab ? '#fff' : '#111',
               border:'none',
-              borderRadius:6,
+              borderRadius:4,
             }}
           >
-            <tab.icon size={16} />
-            <span style={{fontSize:12}}>{tab.label}</span>
+            {tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
       </div>
@@ -1097,14 +991,10 @@ export default function App(){
             onSelect={(sel)=>{
               if (!sel || !threeRef.current) return
               if (sel.type === 'member' && typeof threeRef.current.selectMember === 'function') {
-                setPanelOpen(true)
                 threeRef.current.selectMember(sel.id)
               } else if (sel.type === 'footing' && typeof threeRef.current.selectFooting === 'function') {
-                setPanelOpen(true)
                 threeRef.current.selectFooting(sel.id)
               } else if (sel.type === 'node' && typeof threeRef.current.selectNode === 'function') {
-                setActiveTab('modeling')
-                setPanelOpen(true)
                 threeRef.current.selectNode(sel.id)
               }
             }}
@@ -1119,58 +1009,23 @@ export default function App(){
         {showSectionEditor && (
           <SectionEditor onSectionChange={setDetailingState} selectedDia={dia} setSelectedDia={setDia} length={length} setLength={setLength} count={count} setCount={setCount} addBomLine={addBomLine} />
         )}
-        <div style={{flex:1, position:'relative', minHeight:0}}>
-          <div
-            style={{
-              position:'absolute',
-              top:0,
-              right:0,
-              bottom:0,
-              width: panelOpen ? 360 : 0,
-              transition:'width 200ms ease',
-              overflow:'hidden',
-              borderLeft:'1px solid #eef2f7',
-              background:'#fbfdff',
-              zIndex: 2,
-            }}
-          >
-            <div
-              style={{
-                width:360,
-                height:'100%',
-                overflow:'auto',
-                transform: panelOpen ? 'translateX(0)' : 'translateX(360px)',
-                transition:'transform 200ms ease',
-                padding:10,
-              }}
-            >
+        {activeTab !== 'bom' && (
+        <div style={{flex:1, display:'flex', flexDirection:'column'}}>
+          <div style={{padding:10, borderBottom:'1px solid #eef2f7', background:'#fbfdff'}}>
             {showModelingPanel && (
-              <div style={{marginBottom:10}}>
-                  <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
-                    <div style={{fontWeight:600}}>Sketch</div>
-                    <button onClick={toggleLineDraw} style={{padding:'6px 10px'}}>
-                      {lineDrawMode ? 'Line Draw: On' : 'Line Draw: Off'}
-                    </button>
-                    <button onClick={toggleRotateMode} style={{padding:'6px 10px'}}>
-                      {rotateEnabled ? 'Rotate: On' : 'Rotate: Off'}
-                    </button>
-                    {lineDrawMode && (
-                      <div style={{fontSize:12, color:'#334155'}}>
-                        {lineStartId ? `Start: ${lineStartId.slice(0,6)} (pick end node)` : 'Pick start node'}
-                      </div>
-                    )}
-                  </div>
-                <div style={{display:'flex', alignItems:'center', gap:8, marginTop:8, flexWrap:'wrap'}}>
+              <>
+                <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+                  <div style={{fontWeight:600}}>Nodes</div>
                   <label style={{fontSize:12}}>
                     X
                     <input
                       type="number"
                       step="0.1"
                       value={nodeInput.x}
-                      onChange={(e)=> setNodeInput(s => ({ ...s, x: e.target.value }))}
+                      onChange={(e)=> setNodeInput(s => ({ ...s, x: Number(e.target.value) || 0 }))}
                       style={{width:80, marginLeft:6}}
                     />
-                    <span style={{marginLeft:4, color:'#94a3b8'}}>m</span>
+                    <span style={{marginLeft:6, color:'#64748b'}}>m</span>
                   </label>
                   <label style={{fontSize:12}}>
                     Y
@@ -1178,10 +1033,10 @@ export default function App(){
                       type="number"
                       step="0.1"
                       value={nodeInput.y}
-                      onChange={(e)=> setNodeInput(s => ({ ...s, y: e.target.value }))}
+                      onChange={(e)=> setNodeInput(s => ({ ...s, y: Number(e.target.value) || 0 }))}
                       style={{width:80, marginLeft:6}}
                     />
-                    <span style={{marginLeft:4, color:'#94a3b8'}}>m</span>
+                    <span style={{marginLeft:6, color:'#64748b'}}>m</span>
                   </label>
                   <label style={{fontSize:12}}>
                     Z
@@ -1189,32 +1044,38 @@ export default function App(){
                       type="number"
                       step="0.1"
                       value={nodeInput.z}
-                      onChange={(e)=> setNodeInput(s => ({ ...s, z: e.target.value }))}
+                      onChange={(e)=> setNodeInput(s => ({ ...s, z: Number(e.target.value) || 0 }))}
                       style={{width:80, marginLeft:6}}
                     />
-                    <span style={{marginLeft:4, color:'#94a3b8'}}>m</span>
+                    <span style={{marginLeft:6, color:'#64748b'}}>m</span>
                   </label>
-                  <button onClick={handleAddNodeFromInput} style={{padding:'4px 8px'}}>Add Node</button>
-                  <button onClick={handleUpdateSelectedNode} disabled={model.selection?.type !== 'node'} style={{padding:'4px 8px'}}>Update Selected</button>
-                  <button onClick={()=> setNodeInput({ x: 0, y: 0, z: 0 })} style={{padding:'4px 8px'}}>Clear</button>
-                  <button onClick={handleDeleteSelectedNode} disabled={model.selection?.type !== 'node'} style={{padding:'4px 8px', color:'#b91c1c'}}>Delete Selected</button>
+                  <button onClick={handleAddNodeFromInput} style={{padding:'6px 10px'}}>Add Node</button>
+                  <button
+                    onClick={toggleLineDraw}
+                    style={{padding:'6px 10px', background: lineDrawMode ? '#0b5fff' : '#e2e8f0', color: lineDrawMode ? '#fff' : '#111', border:'none', borderRadius:4}}
+                  >
+                    {lineDrawMode ? 'Line Draw: On' : 'Line Draw: Off'}
+                  </button>
+                  {lineDrawMode && (
+                    <div style={{fontSize:12, color:'#475569'}}>
+                      {lineStartId ? 'Start node selected. Pick end node.' : 'Pick two nodes to create a member.'}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
-            {showModelingPanel && (
-                <div style={{display:'flex', alignItems:'center', gap:10, marginTop:8, flexWrap:'wrap'}}>
+
+                <div style={{display:'flex', alignItems:'center', gap:10, marginTop:10, flexWrap:'wrap'}}>
                   <div style={{fontWeight:600}}>Add Member</div>
-                  <div style={{fontSize:12, color:'#94a3b8'}}>Units: m</div>
                   <label style={{fontSize:12}}>
                     Node A
                     <select
-                      value={memberInputA}
-                      onChange={(e)=> setMemberInputA(e.target.value)}
-                      style={{marginLeft:6}}
+                      value={memberForm.a}
+                      onChange={(e)=> setMemberForm(s => ({ ...s, a: e.target.value }))}
+                      style={{marginLeft:6, minWidth:180}}
                     >
+                      <option value="">Select</option>
                       {model.nodes.map((n, idx) => (
                         <option key={n.id} value={n.id}>
-                          Node {idx} ({Number(n.position?.x || 0).toFixed(2)}, {Number(n.position?.y || 0).toFixed(2)}, {Number(n.position?.z || 0).toFixed(2)})
+                          #{idx} ({Number(n.position.x).toFixed(2)}, {Number(n.position.y).toFixed(2)}, {Number(n.position.z).toFixed(2)}) m
                         </option>
                       ))}
                     </select>
@@ -1222,32 +1083,21 @@ export default function App(){
                   <label style={{fontSize:12}}>
                     Node B
                     <select
-                      value={memberInputB}
-                      onChange={(e)=> setMemberInputB(e.target.value)}
-                      style={{marginLeft:6}}
+                      value={memberForm.b}
+                      onChange={(e)=> setMemberForm(s => ({ ...s, b: e.target.value }))}
+                      style={{marginLeft:6, minWidth:180}}
                     >
+                      <option value="">Select</option>
                       {model.nodes.map((n, idx) => (
                         <option key={n.id} value={n.id}>
-                          Node {idx} ({Number(n.position?.x || 0).toFixed(2)}, {Number(n.position?.y || 0).toFixed(2)}, {Number(n.position?.z || 0).toFixed(2)})
+                          #{idx} ({Number(n.position.x).toFixed(2)}, {Number(n.position.y).toFixed(2)}, {Number(n.position.z).toFixed(2)}) m
                         </option>
                       ))}
                     </select>
                   </label>
-                <button
-                  onClick={handleAddMemberFromInput}
-                  disabled={!memberInputA || !memberInputB || memberInputA === memberInputB}
-                  style={{padding:'6px 10px'}}
-                >
-                  Add Member
-                </button>
-                <button
-                  onClick={handleDeleteSelectedMember}
-                  disabled={model.selection?.type !== 'member'}
-                  style={{padding:'6px 10px', color:'#b91c1c'}}
-                >
-                  Delete Selected
-                </button>
-              </div>
+                  <button onClick={handleAddMemberFromForm} style={{padding:'6px 10px'}}>Add Member</button>
+                </div>
+              </>
             )}
             {showDetailingPanel && (
               <>
@@ -1263,70 +1113,109 @@ export default function App(){
                     </div>
                   </div>
                 )}
-              {selectedMemberIds.length > 0 && (
-                <>
-                  <div style={{marginTop:8, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
-                    <div style={{fontSize:12, color:'#475569'}}>
-                      Selected members: {selectedMemberIds.length}
-                    </div>
-                      <button
-                        onClick={applyDetailingToSelectedMembers}
-                        disabled={!detailingState}
-                        style={{padding:'4px 8px'}}
-                      >
-                        Apply to Selected
-                      </button>
-                      <button
-                        onClick={()=> updateMultiSelection([])}
-                        style={{padding:'4px 8px'}}
-                      >
-                        Clear Selection
-                      </button>
-                    </div>
-                    <div style={{marginTop:6, display:'flex', gap:6, flexWrap:'wrap'}}>
-                      {selectedMemberIds.map((id) => (
-                        <div key={id} style={{display:'flex', alignItems:'center', gap:6, padding:'2px 6px', border:'1px solid #e2e8f0', borderRadius:6, fontSize:12}}>
-                          <div>{id.slice(0,6)}</div>
-                          <button
-                            onClick={()=> updateMultiSelection(selectedMemberIds.filter((m)=> m !== id))}
-                            style={{padding:'0 6px'}}
-                          >
-                            Remove
-                          </button>
-                        </div>
+                <div style={{display:'flex', alignItems:'center', gap:10, marginTop:10, flexWrap:'wrap'}}>
+                  <label style={{fontSize:12}}>
+                    Detail Section
+                    <select
+                      value={detailTargetSectionId}
+                      onChange={(e)=> setDetailTargetSectionId(e.target.value)}
+                      style={{marginLeft:6}}
+                    >
+                      <option value="">Select section</option>
+                      {rcSections.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name} ({s.category})</option>
                       ))}
-                  </div>
-                </>
-              )}
-                {detailTargetSection && (
-                  <div style={{marginTop:8, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
-                    <div style={{fontSize:12, color:'#475569'}}>
-                      Detail target: {detailTargetSection.name}
+                    </select>
+                  </label>
+                  <button onClick={applyDetailingToSection} disabled={!detailingState || !detailTargetSectionId} style={{padding:'6px 10px'}}>
+                    Apply Detailing
+                  </button>
+                  <button onClick={validateDetailing} style={{padding:'6px 10px'}}>
+                    Validate Model
+                  </button>
+                </div>
+                {validationReport && (
+                  <div style={{marginTop:8, fontSize:12}}>
+                    <div style={{color: validationReport.missingSections.length ? '#b91c1c' : '#166534'}}>
+                      Sections missing detailing: {validationReport.missingSections.length}
                     </div>
-                    <button
-                      onClick={() => selectMembersBySection(detailTargetSection.id)}
-                      style={{padding:'4px 8px'}}
-                    >
-                      Select Members
-                    </button>
-                    <button
-                      onClick={applyDetailingToTargetSection}
-                      disabled={!detailingState}
-                      style={{padding:'4px 8px'}}
-                    >
-                      Apply to Section Members
-                    </button>
-                    <button
-                      onClick={()=> setDetailTargetSectionId(null)}
-                      style={{padding:'4px 8px'}}
-                    >
-                      Clear
-                    </button>
+                    <div style={{color: validationReport.missingMembers.length ? '#b91c1c' : '#166534'}}>
+                      Members missing detailing: {validationReport.missingMembers.length}
+                    </div>
+                    <div style={{color: validationReport.missingFootings.length ? '#b91c1c' : '#166534'}}>
+                      Footings missing detailing: {validationReport.missingFootings.length}
+                    </div>
                   </div>
                 )}
               </>
             )}
             {showModelingPanel && (
+              <>
+            <div style={{display:'flex', alignItems:'center', gap:10, marginTop:10}}>
+              <div style={{fontWeight:600}}>Footing</div>
+              <label style={{fontSize:12}}>
+                Section
+                <select
+                  value={footingSectionId}
+                  onChange={(e)=> setFootingSectionId(e.target.value)}
+                  style={{marginLeft:6}}
+                >
+                  <option value="">Select footing section</option>
+                  {mergedSections.filter((s) => s.category === 'footing').map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}{s.source === 'custom' ? ' (Custom)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                onClick={assignFootingSectionToSelected}
+                disabled={model.selection?.type !== 'node' || !footingSectionId}
+                style={{padding:'6px 10px'}}
+              >
+                Assign Footing Section
+              </button>
+              <label style={{fontSize:12}}>
+                B
+                <input
+                  type="number"
+                  step="0.1"
+                  value={footingSize.x}
+                  onChange={(e)=> setFootingSize(s => ({ ...s, x: Number(e.target.value) || 0 }))}
+                  style={{width:70, marginLeft:6}}
+                />
+                <span style={{marginLeft:6, color:'#64748b'}}>m</span>
+              </label>
+              <label style={{fontSize:12}}>
+                D
+                <input
+                  type="number"
+                  step="0.1"
+                  value={footingSize.y}
+                  onChange={(e)=> setFootingSize(s => ({ ...s, y: Number(e.target.value) || 0 }))}
+                  style={{width:70, marginLeft:6}}
+                />
+                <span style={{marginLeft:6, color:'#64748b'}}>m</span>
+              </label>
+              <label style={{fontSize:12}}>
+                L
+                <input
+                  type="number"
+                  step="0.1"
+                  value={footingSize.z}
+                  onChange={(e)=> setFootingSize(s => ({ ...s, z: Number(e.target.value) || 0 }))}
+                  style={{width:70, marginLeft:6}}
+                />
+                <span style={{marginLeft:6, color:'#64748b'}}>m</span>
+              </label>
+              <button
+                onClick={addFootingToSelected}
+                disabled={model.selection?.type !== 'node'}
+                style={{padding:'6px 10px'}}
+              >
+                Add Footing to Selected Node
+              </button>
+            </div>
             <div style={{display:'flex', alignItems:'center', gap:10, marginTop:10, flexWrap:'wrap'}}>
               <div style={{fontWeight:600}}>Levels & NGL</div>
               <label style={{fontSize:12}}>
@@ -1340,6 +1229,15 @@ export default function App(){
                 />
               </label>
               <label style={{fontSize:12}}>
+                Show Grid
+                <input
+                  type="checkbox"
+                  checked={!!model.showGrid}
+                  onChange={(e)=> applyModel({ ...model, showGrid: e.target.checked })}
+                  style={{marginLeft:6}}
+                />
+              </label>
+              <label style={{fontSize:12}}>
                 Show Vertical Grid
                 <input
                   type="checkbox"
@@ -1349,14 +1247,24 @@ export default function App(){
                 />
               </label>
               <label style={{fontSize:12}}>
-                Show Grid
-                <input
-                  type="checkbox"
-                  checked={!!model.showGrid}
-                  onChange={(e)=> applyModel({ ...model, showGrid: e.target.checked })}
+                View
+                <select
+                  value={viewMode}
+                  onChange={(e)=> setViewMode(e.target.value)}
                   style={{marginLeft:6}}
-                />
+                >
+                  <option value="lines">Show lines only</option>
+                  <option value="geometry">Show geometry</option>
+                  <option value="edges">Show edges only</option>
+                  <option value="rebars">Show rebars only</option>
+                </select>
               </label>
+              <button
+                onClick={() => setRotateEnabled((v) => !v)}
+                style={{padding:'6px 10px'}}
+              >
+                {rotateEnabled ? 'Rotate: On' : 'Rotate: Off'}
+              </button>
               <label style={{fontSize:12}}>
                 Snap to Level
                 <input
@@ -1407,8 +1315,7 @@ export default function App(){
               </label>
               <button onClick={handleAddFloor} style={{padding:'6px 10px'}}>Add Floor</button>
             </div>
-            )}
-            {showModelingPanel && model.floors && model.floors.length > 0 && (
+            {model.floors && model.floors.length > 0 && (
               <div style={{marginTop:8}}>
                 {model.floors.map((f) => (
                   <div key={f.id} style={{display:'flex', alignItems:'center', gap:8, marginBottom:4}}>
@@ -1425,321 +1332,53 @@ export default function App(){
                       onChange={(e)=> handleUpdateFloor(f.id, { elevation: Number(e.target.value) || 0 })}
                       style={{width:90}}
                     />
-                    <button onClick={()=> handleRemoveFloor(f.id)} style={{color:'#b91c1c'}}>Delete</button>
+                    <button onClick={()=> handleRemoveFloor(f.id)}>Remove</button>
                   </div>
                 ))}
               </div>
             )}
-            {showSectionsPanel && (
             <div style={{display:'flex', alignItems:'center', gap:10, marginTop:12, flexWrap:'wrap'}}>
-              <div style={{fontWeight:600}}>Section Properties</div>
-              <label style={{fontSize:12}}>
-                Category
-                <select
-                  value={sectionForm.category}
-                  onChange={(e)=> {
-                    const category = e.target.value
-                    const forceRc = category === 'pedestal' || category === 'footing'
-                    setSectionForm(s => ({
-                      ...s,
-                      category,
-                      material: forceRc ? 'rc' : s.material,
-                      shape: forceRc ? 'rect' : s.shape,
-                    }))
-                  }}
-                  style={{marginLeft:6}}
-                >
-                  <option value="beam">Beam</option>
-                  <option value="column">Column</option>
-                  <option value="pedestal">Pedestal</option>
-                  <option value="footing">Footing</option>
-                </select>
-              </label>
-              <label style={{fontSize:12}}>
-                Material
-                <select
-                  value={sectionForm.material}
-                  onChange={(e)=> {
-                    const material = e.target.value
-                    const firstSteel = material === 'steel'
-                      ? aiscShapes.find((s) => s.type === sectionForm.steelType)?.label || ''
-                      : ''
-                    setSectionForm(s => ({
-                      ...s,
-                      material,
-                      shape: material === 'steel' ? 'aisc' : 'rect',
-                      steelShape: material === 'steel' ? (s.steelShape || firstSteel) : '',
-                    }))
-                  }}
-                  style={{marginLeft:6}}
-                >
-                  <option value="rc">Reinforced Concrete</option>
-                  <option value="steel" disabled={sectionForm.category === 'pedestal' || sectionForm.category === 'footing'}>Steel</option>
-                </select>
-              </label>
-              {sectionForm.material === 'steel' && aiscShapes.length === 0 && (
-                <div style={{fontSize:12, color:'#b45309'}}>
-                  No AISC data loaded. Start backend on `http://localhost:4000`.
-                </div>
-              )}
-              <label style={{fontSize:12}}>
-                Units
-                <select
-                  value={aiscUnits}
-                  onChange={(e)=> setAiscUnits(e.target.value)}
-                  style={{marginLeft:6}}
-                >
-                  <option value="metric">Metric</option>
-                  <option value="imperial">Imperial</option>
-                </select>
-              </label>
-              <label style={{fontSize:12}}>
-                Name
-                <input
-                  type="text"
-                  value={sectionForm.name}
-                  onChange={(e)=> setSectionForm(s => ({ ...s, name: e.target.value }))}
-                  style={{width:140, marginLeft:6}}
-                />
-              </label>
-              {sectionForm.material === 'rc' ? (
+              <div style={{fontWeight:600}}>Selection</div>
+              <div style={{fontSize:12}}>
+                {model.selection?.type ? `${model.selection.type} ${model.selection.id?.slice(0,6)}` : 'None'}
+              </div>
+              <button onClick={clearSelection} disabled={!model.selection?.type} style={{padding:'6px 10px'}}>Unselect</button>
+              {model.selection?.type === 'member' && selectedMember && (
                 <>
                   <label style={{fontSize:12}}>
-                    b
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={sectionForm.b}
-                      onChange={(e)=> setSectionForm(s => ({ ...s, b: Number(e.target.value) || 0 }))}
-                      style={{width:70, marginLeft:6}}
-                    />
-                  </label>
-                  <label style={{fontSize:12}}>
-                    h
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={sectionForm.h}
-                      onChange={(e)=> setSectionForm(s => ({ ...s, h: Number(e.target.value) || 0 }))}
-                      style={{width:70, marginLeft:6}}
-                    />
-                  </label>
-                  <label style={{fontSize:12}}>
-                    Centroid
+                    Type
                     <select
-                      value={sectionForm.centroid}
-                      onChange={(e)=> setSectionForm(s => ({ ...s, centroid: e.target.value }))}
+                      value={selectedMember.type || 'beam'}
+                      onChange={(e)=> updateMemberMeta(selectedMember.id, { type: e.target.value })}
+                      style={{marginLeft:6}}
+                    >
+                      <option value="beam">Beam</option>
+                      <option value="column">Column</option>
+                      <option value="pedestal">Pedestal</option>
+                    </select>
+                  </label>
+                  <label style={{fontSize:12}}>
+                    Align
+                    <select
+                      value={selectedMember.align || 'center'}
+                      onChange={(e)=> updateMemberMeta(selectedMember.id, { align: e.target.value })}
                       style={{marginLeft:6}}
                     >
                       <option value="center">Center</option>
                       <option value="top">Top</option>
                     </select>
                   </label>
-                  <button
-                    onClick={() => {
-                      setActiveTab('detailing')
-                      setPanelOpen(true)
-                    }}
-                    style={{padding:'6px 10px'}}
-                  >
-                    Detail
-                  </button>
-                </>
-              ) : (
-                <>
-                  <label style={{fontSize:12}}>
-                    Steel Type
-                    <select
-                      value={sectionForm.steelType}
-                      onChange={(e)=> {
-                        const steelType = e.target.value
-                        const firstShape = aiscShapes.find((s) => s.type === steelType)?.label || ''
-                        setSectionForm(s => ({ ...s, steelType, steelShape: firstShape }))
-                      }}
-                      style={{marginLeft:6}}
-                    >
-                      {aiscTypes.length === 0 && <option value="">None</option>}
-                      {aiscTypes.map((t) => (
-                        <option key={t} value={t}>{t}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label style={{fontSize:12}}>
-                    Steel Section
-                    <select
-                      value={sectionForm.steelShape}
-                      onChange={(e)=> setSectionForm(s => ({ ...s, steelShape: e.target.value }))}
-                      style={{marginLeft:6, minWidth:160}}
-                    >
-                      <option value="">Select</option>
-                      {filteredAiscShapes.map((s) => (
-                        <option key={s.label} value={s.label}>{s.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                </>
-              )}
-              <button
-                onClick={handleAddSection}
-                disabled={sectionForm.material === 'steel' && !sectionForm.steelShape}
-                style={{padding:'6px 10px'}}
-              >
-                Add Section
-              </button>
-              {sectionForm.material === 'rc' && (
-                <>
-                  <button onClick={handleSaveCustomShape} disabled={!hasConfig || !firebaseUid} style={{padding:'6px 10px'}}>
-                    Save Custom Shape
-                  </button>
-                  {!isPremium && (
-                    <div style={{fontSize:12, color:'#b45309'}}>
-                      Custom shapes are premium.
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-            )}
-            {showSectionsPanel && customShapes.length > 0 && (
-              <div style={{display:'flex', alignItems:'center', gap:10, marginTop:8, flexWrap:'wrap'}}>
-                <div style={{fontSize:12, color:'#475569'}}>Custom Shapes</div>
-                <select
-                  value={customShapeId}
-                  onChange={(e)=> setCustomShapeId(e.target.value)}
-                  style={{minWidth:180}}
-                >
-                  <option value="">Select shape</option>
-                  {customShapes.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
-                <button onClick={handleUseCustomShape} disabled={!customShapeId}>
-                  Load
-                </button>
-              </div>
-            )}
-            {showSectionsPanel && mergedSections && mergedSections.length > 0 && (
-              <div style={{marginTop:8}}>
-                {mergedSections.map((s) => (
-                  <div key={s.id} style={{display:'flex', alignItems:'center', gap:8, marginBottom:4}}>
-                    <div style={{minWidth:110, fontSize:12}}>{s.category}</div>
-                    <div style={{flex:1, fontSize:12}}>
-                      {s.name}
-                      {s.material === 'steel' && s.steelShape ? ` (${s.steelShape})` : ''}
-                    </div>
-                    <button
-                      onClick={() => {
-                        setDetailTargetSectionId(s.id)
-                        setActiveTab('detailing')
-                        setPanelOpen(true)
-                      }}
-                      style={{padding:'2px 6px'}}
-                    >
-                      Detail
-                    </button>
-                    {s.source === 'custom' ? (
-                      <div style={{fontSize:12, color:'#64748b'}}>Custom</div>
-                    ) : (
-                      <button onClick={()=> handleRemoveSection(s.id)}>Remove</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-            {showSectionsPanel && (
-            <div style={{display:'flex', alignItems:'center', gap:10, marginTop:10}}>
-              <div style={{fontWeight:600}}>Footing</div>
-              <label style={{fontSize:12}}>
-                B
-                <input
-                  type="number"
-                  step="0.1"
-                  value={footingSize.x}
-                  onChange={(e)=> setFootingSize(s => ({ ...s, x: Number(e.target.value) || 0 }))}
-                  style={{width:70, marginLeft:6}}
-                />
-              </label>
-              <label style={{fontSize:12}}>
-                D
-                <input
-                  type="number"
-                  step="0.1"
-                  value={footingSize.y}
-                  onChange={(e)=> setFootingSize(s => ({ ...s, y: Number(e.target.value) || 0 }))}
-                  style={{width:70, marginLeft:6}}
-                />
-              </label>
-              <label style={{fontSize:12}}>
-                L
-                <input
-                  type="number"
-                  step="0.1"
-                  value={footingSize.z}
-                  onChange={(e)=> setFootingSize(s => ({ ...s, z: Number(e.target.value) || 0 }))}
-                  style={{width:70, marginLeft:6}}
-                />
-              </label>
-              <button
-                onClick={addFootingToSelected}
-                disabled={model.selection?.type !== 'node'}
-                style={{padding:'6px 10px'}}
-              >
-                Add Footing to Selected Node
-              </button>
-            </div>
-            )}
-            {(showModelingPanel || showDetailingPanel || showSectionsPanel) && (
-              <div style={{display:'flex', alignItems:'center', gap:10, marginTop:12, flexWrap:'wrap'}}>
-                <div style={{fontWeight:600}}>Selection</div>
-                <div style={{fontSize:12}}>
-                  {model.selection?.type ? `${model.selection.type} ${model.selection.id?.slice(0,6)}` : 'None'}
-                </div>
-                {model.selection?.type && (
-                  <button
-                    onClick={clearSelection}
-                    style={{padding:'4px 8px'}}
-                  >
-                    Unselect
-                  </button>
-                )}
-                {model.selection?.type === 'member' && (
-                  <>
-                    <label style={{fontSize:12}}>
-                      Type
-                      <select
-                        value={(model.members.find(m => m.id === model.selection.id)?.type) || 'beam'}
-                        onChange={(e)=> updateMemberMeta(model.selection.id, { type: e.target.value })}
-                        style={{marginLeft:6}}
-                      >
-                        <option value="beam">Beam</option>
-                        <option value="column">Column</option>
-                        <option value="pedestal">Pedestal</option>
-                      </select>
-                    </label>
-                    <label style={{fontSize:12}}>
-                      Align
-                      <select
-                        value={(model.members.find(m => m.id === model.selection.id)?.align) || 'center'}
-                        onChange={(e)=> updateMemberMeta(model.selection.id, { align: e.target.value })}
-                        style={{marginLeft:6}}
-                      >
-                        <option value="center">Center</option>
-                        <option value="top">Top</option>
-                      </select>
-                    </label>
                   <label style={{fontSize:12}}>
                     Section
                     <select
-                      value={(model.members.find(m => m.id === model.selection.id)?.sectionId) || ''}
-                      onChange={(e)=> updateMemberMeta(model.selection.id, { sectionId: e.target.value || null })}
+                    value={selectedMember.sectionId || ''}
+                      onChange={(e)=> updateMemberMeta(selectedMember.id, { sectionId: e.target.value || null })}
                       style={{marginLeft:6}}
                     >
-                        <option value="">None</option>
-                      {mergedSections.filter(s => s.category === (model.members.find(m => m.id === model.selection.id)?.type || 'beam')).map(s => (
+                      <option value="">None</option>
+                      {mergedSections.filter(s => s.category === (selectedMember.type || 'beam')).map(s => (
                         <option key={s.id} value={s.id}>
-                          {s.name}
-                          {s.material === 'steel' && s.steelShape ? ` (${s.steelShape})` : ''}
-                          {s.source === 'custom' ? ' (Custom)' : ''}
+                          {s.name}{s.source === 'custom' ? ' (Custom)' : ''}
                         </option>
                       ))}
                     </select>
@@ -1747,69 +1386,59 @@ export default function App(){
                   <label style={{fontSize:12}}>
                     Preview
                     <select
-                      value={(model.members.find(m => m.id === model.selection.id)?.preview) || 'shape'}
-                      onChange={(e)=> updateMemberMeta(model.selection.id, { preview: e.target.value })}
+                      value={selectedMember.preview || 'shape'}
+                      onChange={(e)=> updateMemberMeta(selectedMember.id, { preview: e.target.value })}
                       style={{marginLeft:6}}
                     >
                       <option value="shape">Shape</option>
                       <option value="line">Line</option>
                     </select>
                   </label>
-                    {selectedMemberSection && (
-                      <div style={{fontSize:12, color:'#475569'}}>
-                        h: {Number.isFinite(selectedMemberSection?.dims?.h) ? selectedMemberSection.dims.h : 'n/a'}
-                      </div>
-                    )}
-                    {sectionPreview && (
-                      <svg width="60" height="60" style={{border:'1px solid #e2e8f0', borderRadius:4}}>
-                        <rect
-                          x={(60 - (sectionPreview.b / sectionPreviewScale) * 40) / 2}
-                          y={(60 - (sectionPreview.h / sectionPreviewScale) * 40) / 2}
-                          width={(sectionPreview.b / sectionPreviewScale) * 40}
-                          height={(sectionPreview.h / sectionPreviewScale) * 40}
-                          fill="#e2e8f0"
-                          stroke="#64748b"
-                        />
-                      </svg>
-                    )}
-                    <button onClick={applyDetailingToMember} disabled={!detailingState} style={{padding:'6px 10px'}}>
-                      Apply Detailing
-                    </button>
-                    {selectedMember?.detailing && (
-                      <div style={{fontSize:12, color:'#475569'}}>
-                        Detailing: {selectedMember.detailing?.diaLabel || 'n/a'} @ {selectedMember.detailing?.spacing || 'n/a'} mm
-                      </div>
-                    )}
-                    <button onClick={splitSelectedMember} style={{padding:'6px 10px'}}>Split Member</button>
-                    <button onClick={splitSelectedMemberAtIntersections} style={{padding:'6px 10px'}}>Split at Intersection</button>
-                    <button onClick={joinSelectedMember} style={{padding:'6px 10px'}}>Join Collinear</button>
-                  </>
-                )}
-                {missingTopAlignHeight && (
-                  <div style={{fontSize:12, color:'#b45309'}}>
-                    Top align needs a section with height (h). Assign a section to offset the centroid.
-                  </div>
-                )}
-                {model.selection?.type === 'footing' && (
-                  <label style={{fontSize:12}}>
-                    Section
-                    <select
-                      value={(model.footings.find(f => f.id === model.selection.id)?.sectionId) || ''}
-                      onChange={(e)=> updateFootingMeta(model.selection.id, { sectionId: e.target.value || null })}
-                      style={{marginLeft:6}}
-                    >
-                      <option value="">None</option>
-                      {mergedSections.filter(s => s.category === 'footing').map(s => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}{s.source === 'custom' ? ' (Custom)' : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-              </div>
-            )}
-            {showModelingPanel && (
+                  {selectedMemberSection && (
+                    <div style={{fontSize:12, color:'#475569'}}>
+                      h: {Number.isFinite(selectedMemberSection?.dims?.h) ? selectedMemberSection.dims.h : 'n/a'}
+                    </div>
+                  )}
+                  {sectionPreview && (
+                    <svg width="60" height="60" style={{border:'1px solid #e2e8f0', borderRadius:4}}>
+                      <rect
+                        x={(60 - (sectionPreview.b / sectionPreviewScale) * 40) / 2}
+                        y={(60 - (sectionPreview.h / sectionPreviewScale) * 40) / 2}
+                        width={(sectionPreview.b / sectionPreviewScale) * 40}
+                        height={(sectionPreview.h / sectionPreviewScale) * 40}
+                        fill="#e2e8f0"
+                        stroke="#64748b"
+                      />
+                    </svg>
+                  )}
+                  <button onClick={splitSelectedMember} style={{padding:'6px 10px'}}>Split Member</button>
+                  <button onClick={splitSelectedMemberAtIntersections} style={{padding:'6px 10px'}}>Split at Intersection</button>
+                  <button onClick={joinSelectedMember} style={{padding:'6px 10px'}}>Join Collinear</button>
+                </>
+              )}
+              {missingTopAlignHeight && (
+                <div style={{fontSize:12, color:'#b45309'}}>
+                  Top align needs a section with height (h). Assign a section to offset the centroid.
+                </div>
+              )}
+              {model.selection?.type === 'footing' && (
+                <label style={{fontSize:12}}>
+                  Section
+                  <select
+                    value={(model.footings.find(f => f.id === model.selection.id)?.sectionId) || ''}
+                    onChange={(e)=> updateFootingMeta(model.selection.id, { sectionId: e.target.value || null })}
+                    style={{marginLeft:6}}
+                  >
+                    <option value="">None</option>
+                    {mergedSections.filter(s => s.category === 'footing').map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}{s.source === 'custom' ? ' (Custom)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
             <div style={{display:'flex', alignItems:'center', gap:10, marginTop:12, flexWrap:'wrap'}}>
               <div style={{fontWeight:600}}>Constraints</div>
               <label style={{fontSize:12}}>
@@ -1838,8 +1467,6 @@ export default function App(){
                 Auto-Split Intersections
               </button>
             </div>
-            )}
-            {showModelingPanel && (
             <div style={{display:'flex', alignItems:'center', gap:10, marginTop:12, flexWrap:'wrap'}}>
               <div style={{fontWeight:600}}>Duplicate</div>
               <label style={{fontSize:12}}>
@@ -1875,11 +1502,193 @@ export default function App(){
               <button onClick={duplicateNode} disabled={model.selection?.type !== 'node'}>Duplicate Node</button>
               <button onClick={duplicateMember} disabled={model.selection?.type !== 'member'}>Duplicate Member</button>
             </div>
+              </>
             )}
-            </div>
+            {showSectionsPanel && (
+              <div style={{marginTop:12}}>
+                <div style={{fontWeight:600, marginBottom:8}}>Section Properties</div>
+                <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+                  <label style={{fontSize:12}}>
+                    Category
+                    <select
+                      value={sectionForm.category}
+                      onChange={(e)=> setSectionForm(s => ({ ...s, category: e.target.value }))}
+                      style={{marginLeft:6}}
+                    >
+                      <option value="beam">Beam</option>
+                      <option value="column">Column</option>
+                      {sectionForm.material !== 'steel' && <option value="pedestal">Pedestal</option>}
+                      {sectionForm.material !== 'steel' && <option value="footing">Footing</option>}
+                    </select>
+                  </label>
+                  <label style={{fontSize:12}}>
+                    Material
+                    <select
+                      value={sectionForm.material}
+                      onChange={(e)=> setSectionForm(s => ({ ...s, material: e.target.value }))}
+                      style={{marginLeft:6}}
+                    >
+                      <option value="rc">Reinforced Concrete</option>
+                      <option value="steel">Steel</option>
+                    </select>
+                  </label>
+                  <label style={{fontSize:12}}>
+                    Name
+                    <input
+                      type="text"
+                      value={sectionForm.name}
+                      onChange={(e)=> setSectionForm(s => ({ ...s, name: e.target.value }))}
+                      style={{width:140, marginLeft:6}}
+                    />
+                  </label>
+                  {sectionForm.material === 'steel' ? (
+                    <>
+                      <label style={{fontSize:12}}>
+                        Units
+                        <select
+                          value={aiscUnits}
+                          onChange={(e)=> {
+                            setAiscUnits(e.target.value)
+                            setSectionForm(s => ({ ...s, steelShape: '' }))
+                          }}
+                          style={{marginLeft:6}}
+                        >
+                          <option value="metric">Metric</option>
+                          <option value="imperial">Imperial</option>
+                        </select>
+                      </label>
+                      <label style={{fontSize:12}}>
+                        Steel Type
+                        <select
+                          value={aiscType}
+                          onChange={(e)=> {
+                            setAiscType(e.target.value)
+                            setSectionForm(s => ({ ...s, steelType: e.target.value, steelShape: '' }))
+                          }}
+                          style={{marginLeft:6}}
+                        >
+                          <option value="W">W</option>
+                          <option value="C">C</option>
+                          <option value="L">L</option>
+                          <option value="HSS">HSS</option>
+                          <option value="WT">WT</option>
+                          <option value="PIPE">PIPE</option>
+                          <option value="2L">2L</option>
+                        </select>
+                      </label>
+                      <label style={{fontSize:12}}>
+                        Steel Section
+                        <select
+                          value={sectionForm.steelShape}
+                          onChange={(e)=> setSectionForm(s => ({ ...s, steelShape: e.target.value }))}
+                          style={{marginLeft:6, minWidth:180}}
+                        >
+                          <option value="">Select</option>
+                          {aiscShapes.map((s) => (
+                            <option key={s.label} value={s.label}>{s.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      {aiscLoading && <div style={{fontSize:12, color:'#64748b'}}>Loading AISC...</div>}
+                      {aiscError && <div style={{fontSize:12, color:'#b45309'}}>{aiscError}</div>}
+                    </>
+                  ) : (
+                    <>
+                      <label style={{fontSize:12}}>
+                        b
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={sectionForm.b}
+                          onChange={(e)=> setSectionForm(s => ({ ...s, b: Number(e.target.value) || 0 }))}
+                          style={{width:70, marginLeft:6}}
+                        />
+                      </label>
+                      <label style={{fontSize:12}}>
+                        h
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={sectionForm.h}
+                          onChange={(e)=> setSectionForm(s => ({ ...s, h: Number(e.target.value) || 0 }))}
+                          style={{width:70, marginLeft:6}}
+                        />
+                      </label>
+                      {sectionForm.category === 'footing' && (
+                        <label style={{fontSize:12}}>
+                          l
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={sectionForm.l}
+                            onChange={(e)=> setSectionForm(s => ({ ...s, l: Number(e.target.value) || 0 }))}
+                            style={{width:70, marginLeft:6}}
+                          />
+                        </label>
+                      )}
+                      <label style={{fontSize:12}}>
+                        Centroid
+                        <select
+                          value={sectionForm.centroid}
+                          onChange={(e)=> setSectionForm(s => ({ ...s, centroid: e.target.value }))}
+                          style={{marginLeft:6}}
+                        >
+                          <option value="center">Center</option>
+                          <option value="top">Top</option>
+                        </select>
+                      </label>
+                    </>
+                  )}
+                  <button onClick={handleAddSection} style={{padding:'6px 10px'}}>Add Section</button>
+                  <button onClick={handleSaveCustomShape} disabled={!hasConfig || !firebaseUid || sectionForm.material === 'steel'} style={{padding:'6px 10px'}}>
+                    Save Custom Shape
+                  </button>
+                </div>
+                {!isPremium && (
+                  <div style={{fontSize:12, color:'#b45309', marginTop:6}}>
+                    Custom shapes are premium.
+                  </div>
+                )}
+                <div style={{fontSize:12, color:'#64748b', marginTop:6}}>Detail sections in the Detailing tab.</div>
+                {customShapes.length > 0 && (
+                  <div style={{display:'flex', alignItems:'center', gap:10, marginTop:8, flexWrap:'wrap'}}>
+                    <div style={{fontSize:12, color:'#475569'}}>Custom Shapes</div>
+                    <select
+                      value={customShapeId}
+                      onChange={(e)=> setCustomShapeId(e.target.value)}
+                      style={{minWidth:180}}
+                    >
+                      <option value="">Select shape</option>
+                      {customShapes.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                    <button onClick={handleUseCustomShape} disabled={!customShapeId}>
+                      Load
+                    </button>
+                  </div>
+                )}
+                {mergedSections && mergedSections.length > 0 && (
+                  <div style={{marginTop:8}}>
+                    {mergedSections.map((s) => (
+                      <div key={s.id} style={{display:'flex', alignItems:'center', gap:8, marginBottom:4}}>
+                        <div style={{minWidth:110, fontSize:12}}>{s.category}</div>
+                        <div style={{minWidth:90, fontSize:12}}>{s.material === 'steel' ? 'Steel' : 'RC'}</div>
+                        <div style={{flex:1, fontSize:12}}>{s.name}</div>
+                        {s.source === 'custom' ? (
+                          <div style={{fontSize:12, color:'#64748b'}}>Custom</div>
+                        ) : (
+                          <button onClick={()=> handleRemoveSection(s.id)}>Remove</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           {showScene && (
-            <div style={{position:'absolute', inset:0}}>
+            <div style={{flex:1}}>
               <ThreeScene
                 ref={threeRef}
                 model={model}
@@ -1889,6 +1698,7 @@ export default function App(){
                 nglElevation={model.ngl}
                 showGrid={!!model.showGrid}
                 showVerticalGrid={!!model.showVerticalGrid}
+                viewMode={viewMode}
                 snapToLevel={!!model.snapToLevel}
                 activeLevelId={model.activeLevelId}
                 axisLock={model.axisLock}
@@ -1899,7 +1709,7 @@ export default function App(){
               />
             </div>
           )}
-        </div>
+        </div>)}
         {showBOM && (
           <BOMPanel dia={dia} setDia={setDia} length={length} setLength={setLength} count={count} setCount={setCount} bomLines={bomLines} setBomLines={setBomLines} />
         )}
