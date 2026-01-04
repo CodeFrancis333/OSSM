@@ -75,11 +75,17 @@ export default function TreeSidebar({ open=true, onToggle, getNodes, onSelect, n
     const a = nodesById[m.a]
     const b = nodesById[m.b]
     const len = a && b ? Math.hypot(a.x-b.x, a.y-b.y, a.z-b.z) : null
-    const sectionName = m.sectionId && sectionsById[m.sectionId] ? sectionsById[m.sectionId].name : null
+    const section = m.sectionId && sectionsById[m.sectionId] ? sectionsById[m.sectionId] : null
+    const sectionName = section ? section.name : null
+    const sectionDetail = section
+      ? section.material === 'steel'
+        ? `${section.steelType || ''} ${section.steelShape || ''}`.trim()
+        : `b${section.dims?.b || 0} h${section.dims?.h || 0}${section.dims?.l ? ` l${section.dims.l}` : ''}`
+      : ''
     // prefer provided unit weight -> fall back to rebarLib or formula
     const unitWeight = m.unitWeight || (rebarLib && rebarLib[selectedDia]) || (()=>{ const n = Number(String(selectedDia).replace('mm','')); return isNaN(n) ? 0 : +((n*n)/162).toFixed(3) })()
     const weight = unitWeight && len ? +(unitWeight * len).toFixed(3) : null
-    const label = `#${idx}: ${m.a.slice(0,6)} ↔ ${m.b.slice(0,6)}${m.type ? ` [${m.type}]` : ''}${sectionName ? ` {${sectionName}}` : ''}${len ? ` — ${len.toFixed(3)} m` : ''}${weight ? ` • ${weight} kg` : ''}`
+    const label = `#${idx}: ${m.a.slice(0,6)} -> ${m.b.slice(0,6)}${m.type ? ` [${m.type}]` : ''}${sectionName ? ` {${sectionName}}` : ' {Unassigned}'}${sectionDetail ? ` (${sectionDetail})` : ''}${len ? ` | ${len.toFixed(3)} m` : ''}${weight ? ` | ${weight} kg` : ''}`
     return { label, id: m.id, type: 'member', length: len, a: m.a, b: m.b, preview: m.preview || 'shape' }
   }) : [ { label: 'No members' } ]
 

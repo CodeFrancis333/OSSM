@@ -63,6 +63,7 @@ export default function App(){
   const [panelOpen, setPanelOpen] = useState({
     nodes: true,
     member: false,
+    footing: false,
     levels: false,
     constraints: false,
     duplicate: false,
@@ -89,6 +90,7 @@ export default function App(){
   const importRef = useRef(null)
   const pendingMemberMetaRef = useRef({})
   const pendingFootingMetaRef = useRef({})
+  const lastSelectedMemberIdRef = useRef(null)
   const [model, setModel] = useState(() => loadModel() || createEmptyModel())
   const initialModelRef = useRef(model)
   const [rebarLib, setRebarLib] = useState({})
@@ -251,20 +253,23 @@ export default function App(){
     if (firstRc) setDetailTargetSectionId(firstRc.id)
   }, [model.sections, detailTargetSectionId])
 
-  useEffect(() => {
-    if (model.selection?.type === 'member') {
-      const member = model.members.find((m) => m.id === model.selection.id)
-      setMemberSectionChoice(member?.sectionId || '')
-    } else {
-      setMemberSectionChoice('')
-    }
-  }, [model.selection, model.members])
 
   useEffect(() => {
     if (activeTab !== 'modeling' && rotateEnabled) {
       setRotateEnabled(false)
     }
   }, [activeTab, rotateEnabled])
+
+  useEffect(() => {
+    if (model.selection?.type === 'member') {
+      const memberId = model.selection.id
+      if (memberId && lastSelectedMemberIdRef.current !== memberId) {
+        const member = model.members.find((m) => m.id === memberId)
+        setMemberSectionChoice(member?.sectionId || '')
+        lastSelectedMemberIdRef.current = memberId
+      }
+    }
+  }, [model.selection?.id])
 
   function applyModel(nextModel){
     setModel(nextModel)
@@ -512,16 +517,38 @@ export default function App(){
       normalize.sectionId = null
       normalize.align = 'center'
     }
-    applyModel({
-      ...model,
-      members: model.members.map((m) => (m.id === memberId ? { ...m, ...normalize } : m)),
+    if ('sectionId' in patch && patch.sectionId && !('preview' in patch)) {
+      normalize.preview = 'shape'
+    }
+    const existing = model.members.find((m) => m.id === memberId) || {}
+    pendingMemberMetaRef.current[memberId] = {
+      type: normalize.type ?? existing.type ?? 'beam',
+      align: normalize.align ?? existing.align ?? 'center',
+      sectionId: normalize.sectionId ?? existing.sectionId ?? null,
+      rotation: normalize.rotation ?? existing.rotation ?? { x: 0, y: 0, z: 0 },
+      detailing: normalize.detailing ?? existing.detailing ?? null,
+      preview: normalize.preview ?? existing.preview ?? 'shape',
+    }
+    setModel((prev) => {
+      const next = {
+        ...prev,
+        members: prev.members.map((m) => (m.id === memberId ? { ...m, ...normalize } : m)),
+      }
+      if (threeRef.current && typeof threeRef.current.setModel === 'function') {
+        threeRef.current.setModel(next)
+      }
+      return next
     })
   }
 
   function assignSectionToSelectedMember(){
-    if (model.selection?.type !== 'member') return
-    updateMemberMeta(model.selection.id, { sectionId: memberSectionChoice || null })
+    const memberId = model.selection?.type === 'member'
+      ? model.selection.id
+      : lastSelectedMemberIdRef.current
+    if (!memberId) return
+    updateMemberMeta(memberId, { sectionId: memberSectionChoice || null, preview: memberSectionChoice ? 'shape' : undefined })
   }
+
 
   function applyDetailingToSection(){
     if (!detailingState || !detailTargetSectionId) return
@@ -1084,6 +1111,7 @@ export default function App(){
                   {[
                     { key: 'nodes', label: 'Nodes' },
                     { key: 'member', label: 'Add Member' },
+                    { key: 'footing', label: 'Footing' },
                     { key: 'levels', label: 'Levels & NGL' },
                     { key: 'constraints', label: 'Constraints' },
                     { key: 'duplicate', label: 'Duplicate' },
@@ -1190,6 +1218,66 @@ export default function App(){
                   </label>
                   <button onClick={handleAddMemberFromForm} style={{padding:'6px 10px'}}>Add Member</button>
                 </div>
+                )}
+                {panelOpen.footing && (
+                  <div style={{display:'flex', alignItems:'center', gap:10, marginTop:10, flexWrap:'wrap'}}>
+                    <div style={{fontWeight:600}}>Footing</div>
+                    <label style={{fontSize:12}}>
+                      Section
+                      <select
+                        value={footingSectionId}
+                        onChange={(e)=> setFootingSectionId(e.target.value)}
+                        style={{marginLeft:6}}
+                      >
+                        <option value="">Select footing section</option>
+                        {mergedSections.filter((s) => s.category === 'footing').map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}{s.source === 'custom' ? ' (Custom)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      onClick={assignFootingSectionToSelected}
+                      disabled={model.selection?.type !== 'node' || !footingSectionId}
+                      style={{padding:'6px 10px'}}
+                    >
+                      Assign Footing to Selected Node
+                    </button>
+                    <label style={{fontSize:12}}>
+                      B
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={footingSize.x}
+                        onChange={(e)=> setFootingSize(s => ({ ...s, x: Number(e.target.value) || 0 }))}
+                        style={{width:70, marginLeft:6}}
+                      />
+                      <span style={{marginLeft:6, color:'#64748b'}}>m</span>
+                    </label>
+                    <label style={{fontSize:12}}>
+                      D
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={footingSize.y}
+                        onChange={(e)=> setFootingSize(s => ({ ...s, y: Number(e.target.value) || 0 }))}
+                        style={{width:70, marginLeft:6}}
+                      />
+                      <span style={{marginLeft:6, color:'#64748b'}}>m</span>
+                    </label>
+                    <label style={{fontSize:12}}>
+                      L
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={footingSize.z}
+                        onChange={(e)=> setFootingSize(s => ({ ...s, z: Number(e.target.value) || 0 }))}
+                        style={{width:70, marginLeft:6}}
+                      />
+                      <span style={{marginLeft:6, color:'#64748b'}}>m</span>
+                    </label>
+                  </div>
                 )}
                 {panelOpen.extrude && (
                   <div style={{display:'flex', alignItems:'center', gap:10, marginTop:10, flexWrap:'wrap'}}>
@@ -1491,7 +1579,7 @@ export default function App(){
                       ))}
                     </select>
                   </label>
-                  <button onClick={assignSectionToSelectedMember} style={{padding:'6px 10px'}}>Assign Section</button>
+                  <button onClick={assignSectionToSelectedMember} disabled={!memberSectionChoice} style={{padding:'6px 10px'}}>Assign Section</button>
                   <label style={{fontSize:12}}>
                     Preview
                     <select
@@ -1801,69 +1889,6 @@ export default function App(){
                     ))}
                   </div>
                 )}
-                <div style={{marginTop:12}}>
-                  <div style={{fontWeight:600, marginBottom:6}}>Footing Assignment</div>
-                  <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
-                    <label style={{fontSize:12}}>
-                      Section
-                      <select
-                        value={footingSectionId}
-                        onChange={(e)=> setFootingSectionId(e.target.value)}
-                        style={{marginLeft:6}}
-                      >
-                        <option value="">Select footing section</option>
-                        {mergedSections.filter((s) => s.category === 'footing').map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.name}{s.source === 'custom' ? ' (Custom)' : ''}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      onClick={assignFootingSectionToSelected}
-                      disabled={model.selection?.type !== 'node' || !footingSectionId}
-                      style={{padding:'6px 10px'}}
-                    >
-                      Assign Footing to Selected Node
-                    </button>
-                    <label style={{fontSize:12}}>
-                      B
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={footingSize.x}
-                        onChange={(e)=> setFootingSize(s => ({ ...s, x: Number(e.target.value) || 0 }))}
-                        style={{width:70, marginLeft:6}}
-                      />
-                      <span style={{marginLeft:6, color:'#64748b'}}>m</span>
-                    </label>
-                    <label style={{fontSize:12}}>
-                      D
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={footingSize.y}
-                        onChange={(e)=> setFootingSize(s => ({ ...s, y: Number(e.target.value) || 0 }))}
-                        style={{width:70, marginLeft:6}}
-                      />
-                      <span style={{marginLeft:6, color:'#64748b'}}>m</span>
-                    </label>
-                    <label style={{fontSize:12}}>
-                      L
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={footingSize.z}
-                        onChange={(e)=> setFootingSize(s => ({ ...s, z: Number(e.target.value) || 0 }))}
-                        style={{width:70, marginLeft:6}}
-                      />
-                      <span style={{marginLeft:6, color:'#64748b'}}>m</span>
-                    </label>
-                  </div>
-                  <div style={{fontSize:12, color:'#64748b', marginTop:6}}>
-                    Select a node in Modeling first, then assign a footing section here.
-                  </div>
-                </div>
               </div>
             )}
           </div>

@@ -1264,7 +1264,6 @@ const ThreeScene = forwardRef((props, ref) => {
     function updateMemberMeshes(model, sectionsById) {
       if (!model) return
       const viewMode = props.viewMode || 'geometry'
-      const forceLines = viewMode === 'lines'
       const forceEdges = viewMode === 'edges'
       const forceRebars = viewMode === 'rebars'
       const membersById = Object.fromEntries((model.members || []).map((m) => [m.id, m]))
@@ -1273,6 +1272,8 @@ const ThreeScene = forwardRef((props, ref) => {
         const section = meta?.sectionId ? sectionsById[meta.sectionId] : null
         const dims = getMemberSectionDims(section)
         const preview = meta?.preview || 'shape'
+        const hasSection = !!section
+        const forceLines = viewMode === 'lines' && !hasSection
         if (forceRebars) {
           if (m.mesh) m.mesh.visible = false
           m.line.visible = false
