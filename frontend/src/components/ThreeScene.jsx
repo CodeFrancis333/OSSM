@@ -31,6 +31,7 @@ const ThreeScene = forwardRef((props, ref) => {
   const selectedFootingRef = useRef(null)
   const selectedRef = useRef(null)
   const selectedMembersRef = useRef(new Set())
+  const selectedNodesRef = useRef(new Set())
   const setRotateModeRef = useRef(null)
   const addNodeRef = useRef(null)
   const addMemberRef = useRef(null)
@@ -68,6 +69,22 @@ const ThreeScene = forwardRef((props, ref) => {
     })
   }
 
+  function refreshNodeVisuals() {
+    const primary = selectedRef.current?.userData?.id
+    nodesRef.current.forEach((n) => {
+      if (!n.material?.emissive) return
+      if (n.userData.id === primary) {
+        n.material.emissive.setHex(0x222222)
+        return
+      }
+      if (selectedNodesRef.current.has(n.userData.id)) {
+        n.material.emissive.setHex(0x333333)
+        return
+      }
+      n.material.emissive.setHex(0x000000)
+    })
+  }
+
   const rulerTopRef = useRef(null)
   const rulerLeftRef = useRef(null)
   const guideLinesRef = useRef(null)
@@ -86,6 +103,7 @@ const ThreeScene = forwardRef((props, ref) => {
 
       selectedMembersRef.current.clear()
       refreshMemberVisuals()
+      selectedNodesRef.current = new Set([found.userData.id])
       if (selectedRef.current && selectedRef.current !== found) {
         selectedRef.current.material?.emissive?.setHex?.(0x000000)
       }
@@ -101,8 +119,8 @@ const ThreeScene = forwardRef((props, ref) => {
       }
       selectedRef.current = found
       setSelectedId(found.userData.id)
-      props.onSelectionChange && props.onSelectionChange({ type: 'node', id: found.userData.id })
-      found.material?.emissive?.setHex?.(0x222222)
+      props.onSelectionChange && props.onSelectionChange({ type: 'node', id: found.userData.id, multiNodes: Array.from(selectedNodesRef.current) })
+      refreshNodeVisuals()
     },
     selectMember: (id) => {
       const found = membersRef.current.find((m) => m.id === id)
@@ -112,6 +130,8 @@ const ThreeScene = forwardRef((props, ref) => {
         selectedRef.current.material?.emissive?.setHex?.(0x000000)
         selectedRef.current = null
       }
+      selectedNodesRef.current.clear()
+      refreshNodeVisuals()
       if (selectedMemberRef.current && selectedMemberRef.current !== found) {
         selectedMemberRef.current.line.material &&
           selectedMemberRef.current.line.material.color.setHex(0x333333)
@@ -131,6 +151,8 @@ const ThreeScene = forwardRef((props, ref) => {
       if (!found) return
       selectedMembersRef.current.clear()
       refreshMemberVisuals()
+      selectedNodesRef.current.clear()
+      refreshNodeVisuals()
       if (selectedRef.current) {
         selectedRef.current.material?.emissive?.setHex?.(0x000000)
         selectedRef.current = null
@@ -168,6 +190,8 @@ const ThreeScene = forwardRef((props, ref) => {
       node.parent && node.parent.remove(node)
       nodesRef.current.splice(idx, 1)
       if (selectedRef.current === node) selectedRef.current = null
+      selectedNodesRef.current.delete(id)
+      refreshNodeVisuals()
       setSelectedId(null)
       props.onSelectionChange && props.onSelectionChange({ type: null, id: null })
       emitSceneChange()
@@ -194,6 +218,7 @@ const ThreeScene = forwardRef((props, ref) => {
         selectedRef.current.material?.emissive?.setHex?.(0x000000)
         selectedRef.current = null
       }
+      selectedNodesRef.current.clear()
       if (selectedMemberRef.current) {
         selectedMemberRef.current.line.material &&
           selectedMemberRef.current.line.material.color.setHex(0x333333)
@@ -206,6 +231,7 @@ const ThreeScene = forwardRef((props, ref) => {
       }
       selectedMembersRef.current.clear()
       refreshMemberVisuals()
+      refreshNodeVisuals()
       setSelectedId(null)
       props.onSelectionChange && props.onSelectionChange({ type: null, id: null, multi: [] })
     },
@@ -679,7 +705,11 @@ const ThreeScene = forwardRef((props, ref) => {
 
         selectedMembersRef.current.clear()
         refreshMemberVisuals()
-        if (selectedRef.current && selectedRef.current !== node) {
+        const isMulti = !!ev.shiftKey
+        if (!isMulti) {
+          selectedNodesRef.current.clear()
+        }
+        if (selectedRef.current && selectedRef.current !== node && !isMulti) {
           selectedRef.current.material?.emissive?.setHex?.(0x000000)
         }
         if (selectedMemberRef.current) {
@@ -692,11 +722,29 @@ const ThreeScene = forwardRef((props, ref) => {
           selectedFootingRef.current.mesh.material?.emissive?.setHex?.(0x000000)
           selectedFootingRef.current = null
         }
+        if (isMulti) {
+          if (selectedNodesRef.current.has(node.userData.id)) {
+            selectedNodesRef.current.delete(node.userData.id)
+          } else {
+            selectedNodesRef.current.add(node.userData.id)
+          }
+          if (selectedNodesRef.current.size === 0) {
+            selectedRef.current = null
+            setSelectedId(null)
+            props.onSelectionChange && props.onSelectionChange({ type: null, id: null })
+          } else {
+            selectedRef.current = node
+            setSelectedId(node.userData.id)
+            props.onSelectionChange && props.onSelectionChange({ type: 'node', id: node.userData.id, multiNodes: Array.from(selectedNodesRef.current) })
+          }
+          refreshNodeVisuals()
+          return
+        }
+        selectedNodesRef.current = new Set([node.userData.id])
         selectedRef.current = node
         setSelectedId(node.userData.id)
-        props.onSelectionChange && props.onSelectionChange({ type: 'node', id: node.userData.id })
-
-        node.material?.emissive?.setHex?.(0x444444)
+        props.onSelectionChange && props.onSelectionChange({ type: 'node', id: node.userData.id, multiNodes: Array.from(selectedNodesRef.current) })
+        refreshNodeVisuals()
       } else if (hit.type === 'member') {
         // select member
         const member = hit.object
@@ -705,6 +753,8 @@ const ThreeScene = forwardRef((props, ref) => {
           selectedRef.current.material?.emissive?.setHex?.(0x000000)
           selectedRef.current = null
         }
+        selectedNodesRef.current.clear()
+        refreshNodeVisuals()
         if (!isMulti) {
           selectedMembersRef.current.clear()
         }
@@ -738,6 +788,8 @@ const ThreeScene = forwardRef((props, ref) => {
         const footing = hit.object
         selectedMembersRef.current.clear()
         refreshMemberVisuals()
+        selectedNodesRef.current.clear()
+        refreshNodeVisuals()
         if (selectedRef.current) {
           selectedRef.current.material?.emissive?.setHex?.(0x000000)
           selectedRef.current = null
@@ -822,6 +874,7 @@ const ThreeScene = forwardRef((props, ref) => {
           selectedRef.current.material?.emissive?.setHex?.(0x000000)
           selectedRef.current = null
         }
+        selectedNodesRef.current.clear()
         if (selectedMemberRef.current) {
           selectedMemberRef.current.line.material &&
             selectedMemberRef.current.line.material.color.setHex(0x333333)
@@ -834,6 +887,7 @@ const ThreeScene = forwardRef((props, ref) => {
         }
         selectedMembersRef.current.clear()
         refreshMemberVisuals()
+        refreshNodeVisuals()
         setSelectedId(null)
         props.onSelectionChange && props.onSelectionChange({ type: null, id: null })
         return
@@ -1563,17 +1617,31 @@ const ThreeScene = forwardRef((props, ref) => {
             Select
           </button>
           <button
-            onClick={() => setTool('extrude')}
+            onClick={() => {
+              if (ref && ref.current && typeof ref.current.clearSelection === 'function') {
+                ref.current.clearSelection()
+              } else {
+                selectedRef.current = null
+                selectedMemberRef.current = null
+                selectedFootingRef.current = null
+                selectedMembersRef.current.clear()
+                selectedNodesRef.current.clear()
+                refreshMemberVisuals()
+                refreshNodeVisuals()
+                setSelectedId(null)
+                props.onSelectionChange && props.onSelectionChange({ type: null, id: null })
+              }
+            }}
             style={{
               padding: '6px 8px',
-              background: tool === 'extrude' ? '#0b5fff' : '#eee',
-              color: tool === 'extrude' ? '#fff' : '#222',
+              background: '#eee',
+              color: '#222',
               border: 'none',
               borderRadius: 4,
               cursor: 'pointer',
             }}
           >
-            Extrude
+            Unselect
           </button>
         </div>
         <div style={{ fontSize: 12, color: '#333' }}>Tool: {tool}</div>
