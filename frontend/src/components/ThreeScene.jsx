@@ -32,6 +32,7 @@ const ThreeScene = forwardRef((props, ref) => {
   const selectedRef = useRef(null)
   const selectedMembersRef = useRef(new Set())
   const selectedNodesRef = useRef(new Set())
+  const controlsRef = useRef(null)
   const setRotateModeRef = useRef(null)
   const addNodeRef = useRef(null)
   const addMemberRef = useRef(null)
@@ -340,6 +341,7 @@ const ThreeScene = forwardRef((props, ref) => {
     el.appendChild(renderer.domElement)
 
     const controls = new OrbitControls(camera, renderer.domElement)
+    controlsRef.current = controls
     controls.target.set(0, 0, 0)
     controls.mouseButtons = {
       LEFT: THREE.MOUSE.ROTATE,
@@ -681,10 +683,13 @@ const ThreeScene = forwardRef((props, ref) => {
     }
 
     function onPointerDown(ev) {
-      if (rotateModeRef.current) {
+      const hit = pickNode(ev)
+      if (rotateModeRef.current && !hit) {
         return
       }
-      const hit = pickNode(ev)
+      if (rotateModeRef.current && hit && controlsRef.current) {
+        controlsRef.current.enableRotate = false
+      }
       if (!hit) {
         if (ref && ref.current && typeof ref.current.clearSelection === 'function') {
           ref.current.clearSelection()
@@ -859,6 +864,9 @@ const ThreeScene = forwardRef((props, ref) => {
     }
 
     function onPointerUp() {
+      if (rotateModeRef.current && controlsRef.current) {
+        controlsRef.current.enableRotate = true
+      }
       if (dragging && dragTarget) {
         dragTarget.material?.emissive?.setHex?.(0x222222)
       }

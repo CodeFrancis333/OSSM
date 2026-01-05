@@ -108,13 +108,21 @@ export default function App(){
         const prev = existingMembers[mem.id]
         const pendingMeta = pending[mem.id]
         if (pendingMeta) delete pending[mem.id]
-        const type = pendingMeta?.type || prev?.type || 'beam'
+        const type = pendingMeta?.type ?? prev?.type ?? 'beam'
+        const align = pendingMeta?.align ?? prev?.align ?? (type === 'beam' ? 'top' : 'center')
+        const sectionId = pendingMeta?.sectionId ?? prev?.sectionId ?? null
+        const rotation = pendingMeta?.rotation ?? prev?.rotation ?? { x: 0, y: 0, z: 0 }
+        const preview = pendingMeta?.preview ?? prev?.preview ?? 'shape'
+        const detailing = pendingMeta?.detailing ?? prev?.detailing ?? null
         return {
+          ...(prev || {}),
           ...mem,
           type,
-          align: pendingMeta?.align || prev?.align || (type === 'beam' ? 'top' : 'center'),
-          sectionId: pendingMeta?.sectionId || prev?.sectionId || null,
-          rotation: pendingMeta?.rotation || prev?.rotation || { x: 0, y: 0, z: 0 },
+          align,
+          sectionId,
+          rotation,
+          preview,
+          detailing,
         }
       })
       const pendingFootings = pendingFootingMetaRef.current || {}
@@ -396,6 +404,7 @@ export default function App(){
           sectionId: section.id,
           align: section.centroid === 'top' ? 'top' : 'center',
           rotation: { x: 0, y: 0, z: 0 },
+          preview: 'shape',
         }
       }
       prevId = nodeId
