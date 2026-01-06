@@ -55,6 +55,7 @@ export default function App(){
   const [rotateEnabled, setRotateEnabled] = useState(false)
   const [nodeInput, setNodeInput] = useState({ x: 0, y: 0, z: 0 })
   const [lineDrawMode, setLineDrawMode] = useState(false)
+  const [multiSelectMode, setMultiSelectMode] = useState('none') // 'none' | 'nodes' | 'members'
   const [lineStartId, setLineStartId] = useState(null)
   const [memberForm, setMemberForm] = useState({ a: '', b: '' })
   const [extrudeForm, setExtrudeForm] = useState({ sectionId: '', dx: 0, dy: 0, dz: 0, count: 1 })
@@ -68,6 +69,7 @@ export default function App(){
     constraints: false,
     duplicate: false,
     extrude: false,
+    multi: false,
   })
   const [footingSectionId, setFootingSectionId] = useState('')
   const [aiscUnits, setAiscUnits] = useState('metric')
@@ -89,8 +91,10 @@ export default function App(){
   const threeRef = useRef(null)
   const importRef = useRef(null)
   const pendingMemberMetaRef = useRef({})
+  const memberMetaRef = useRef({})
   const pendingFootingMetaRef = useRef({})
   const lastSelectedMemberIdRef = useRef(null)
+  const lastSelectedNodeIdRef = useRef(null)
   const [model, setModel] = useState(() => loadModel() || createEmptyModel())
   const initialModelRef = useRef(model)
   const [rebarLib, setRebarLib] = useState({})
@@ -104,17 +108,19 @@ export default function App(){
       const existingMembers = Object.fromEntries((m.members || []).map((mem) => [mem.id, mem]))
       const existingFootings = Object.fromEntries((m.footings || []).map((f) => [f.id, f]))
       const pending = pendingMemberMetaRef.current || {}
+      const metaCache = memberMetaRef.current || {}
       const members = (payload.members || []).map((mem) => {
         const prev = existingMembers[mem.id]
         const pendingMeta = pending[mem.id]
+        const cachedMeta = metaCache[mem.id]
         if (pendingMeta) delete pending[mem.id]
-        const type = pendingMeta?.type ?? prev?.type ?? 'beam'
-        const align = pendingMeta?.align ?? prev?.align ?? (type === 'beam' ? 'top' : 'center')
-        const sectionId = pendingMeta?.sectionId ?? prev?.sectionId ?? null
-        const rotation = pendingMeta?.rotation ?? prev?.rotation ?? { x: 0, y: 0, z: 0 }
-        const preview = pendingMeta?.preview ?? prev?.preview ?? 'shape'
-        const detailing = pendingMeta?.detailing ?? prev?.detailing ?? null
-        return {
+        const type = pendingMeta?.type ?? cachedMeta?.type ?? prev?.type ?? 'beam'
+        const align = pendingMeta?.align ?? cachedMeta?.align ?? prev?.align ?? (type === 'beam' ? 'top' : 'center')
+        const sectionId = pendingMeta?.sectionId ?? cachedMeta?.sectionId ?? prev?.sectionId ?? null
+        const rotation = pendingMeta?.rotation ?? cachedMeta?.rotation ?? prev?.rotation ?? { x: 0, y: 0, z: 0 }
+        const preview = pendingMeta?.preview ?? cachedMeta?.preview ?? prev?.preview ?? 'shape'
+        const detailing = pendingMeta?.detailing ?? cachedMeta?.detailing ?? prev?.detailing ?? null
+        const nextMember = {
           ...(prev || {}),
           ...mem,
           type,
@@ -124,6 +130,15 @@ export default function App(){
           preview,
           detailing,
         }
+        metaCache[mem.id] = {
+          type,
+          align,
+          sectionId,
+          rotation,
+          preview,
+          detailing,
+        }
+        return nextMember
       })
       const pendingFootings = pendingFootingMetaRef.current || {}
       const footings = (payload.footings || []).map((f) => {
@@ -148,8 +163,11 @@ export default function App(){
     setModel(m => setSelection(m, selection))
     if (selection?.type === 'node' && Array.isArray(selection.multiNodes)) {
       setMultiNodeIds(selection.multiNodes)
+      lastSelectedNodeIdRef.current = selection.id
     } else if (!selection || selection.type !== 'node') {
       setMultiNodeIds([])
+    } else if (selection?.type === 'node') {
+      lastSelectedNodeIdRef.current = selection.id
     }
     if (!selection || selection.type !== 'node' || !lineDrawMode) return
     if (!lineStartId) {
@@ -157,9 +175,6 @@ export default function App(){
       return
     }
     if (lineStartId === selection.id) return
-    if (threeRef.current && typeof threeRef.current.addMember === 'function'){
-      threeRef.current.addMember(lineStartId, selection.id)
-    }
     setLineStartId(null)
   }
 
@@ -366,7 +381,33 @@ export default function App(){
     const x = Number(nodeInput.x) || 0
     const y = Number(nodeInput.y) || 0
     const z = Number(nodeInput.z) || 0
+    const eps = 1e-6
+    const exists = model.nodes.some((n) => {
+      const pos = n.position || {}
+      return Math.abs((pos.x || 0) - x) < eps &&
+        Math.abs((pos.y || 0) - y) < eps &&
+        Math.abs((pos.z || 0) - z) < eps
+    })
+    if (exists) {
+      alert('A node already exists at these coordinates.')
+      return
+    }
     threeRef.current.addNode(new THREE.Vector3(x, y, z))
+  }
+
+  function handleSetMultiSelectMode(next){
+    setMultiSelectMode((prev) => {
+      const value = prev === next ? 'none' : next
+      if (threeRef.current && typeof threeRef.current.clearSelection === 'function') {
+        threeRef.current.clearSelection()
+      }
+      setMultiNodeIds([])
+      if (value === 'nodes' || value === 'members') {
+        setLineDrawMode(false)
+        setLineStartId(null)
+      }
+      return value
+    })
   }
 
   function handleAddMemberFromForm(){
@@ -376,19 +417,67 @@ export default function App(){
     setMemberForm({ a: '', b: '' })
   }
 
+  function createMemberWithMeta(aId, bId, meta){
+    if (!threeRef.current || typeof threeRef.current.addMember !== 'function') return null
+    const forcedId = THREE.MathUtils.generateUUID()
+    pendingMemberMetaRef.current[forcedId] = meta
+    memberMetaRef.current[forcedId] = meta
+    const newId = threeRef.current.addMember(aId, bId, forcedId)
+    if (!newId) {
+      delete pendingMemberMetaRef.current[forcedId]
+      delete memberMetaRef.current[forcedId]
+    } else if (newId !== forcedId) {
+      pendingMemberMetaRef.current[newId] = pendingMemberMetaRef.current[forcedId]
+      delete pendingMemberMetaRef.current[forcedId]
+      memberMetaRef.current[newId] = memberMetaRef.current[forcedId]
+      delete memberMetaRef.current[forcedId]
+    }
+    if (newId) {
+      setModel((prev) => {
+        if (prev.members.some((m) => m.id === newId)) return prev
+        const nextMember = {
+          id: newId,
+          a: aId,
+          b: bId,
+          type: meta?.type || 'beam',
+          align: meta?.align || 'center',
+          sectionId: meta?.sectionId || null,
+          rotation: meta?.rotation || { x: 0, y: 0, z: 0 },
+          preview: meta?.preview || 'shape',
+          detailing: meta?.detailing || null,
+        }
+        return { ...prev, members: [...prev.members, nextMember] }
+      })
+    }
+    return newId
+  }
+
   function handleExtrude(){
-    if (model.selection?.type !== 'node') return
+    const baseNodeId = model.selection?.type === 'node'
+      ? model.selection.id
+      : lastSelectedNodeIdRef.current
+    if (!baseNodeId) return
     if (!threeRef.current || typeof threeRef.current.addNode !== 'function' || typeof threeRef.current.addMember !== 'function') return
     const section = mergedSections.find((s) => s.id === extrudeForm.sectionId)
     if (!section) return
-    const baseNode = model.nodes.find((n) => n.id === model.selection.id)
-    if (!baseNode?.position) return
+    const sceneNodes = typeof threeRef.current.getNodes === 'function' ? threeRef.current.getNodes() : []
+    const baseNode = model.nodes.find((n) => n.id === baseNodeId)
+    const baseSceneNode = sceneNodes.find((n) => n.id === baseNodeId)
+    const basePos = baseNode?.position || baseSceneNode?.position
+    if (!basePos) return
     const dx = Number(extrudeForm.dx) || 0
     const dy = Number(extrudeForm.dy) || 0
     const dz = Number(extrudeForm.dz) || 0
     const count = Math.max(1, Number(extrudeForm.count) || 1)
-    let prevId = model.selection.id
-    let prevPos = new THREE.Vector3(baseNode.position.x, baseNode.position.y, baseNode.position.z)
+    let prevId = baseNodeId
+    let prevPos = new THREE.Vector3(basePos.x, basePos.y, basePos.z)
+    const meta = {
+      type: section.category || 'beam',
+      sectionId: section.id,
+      align: section.centroid === 'top' ? 'top' : 'center',
+      rotation: { x: 0, y: 0, z: 0 },
+      preview: 'shape',
+    }
     for (let i = 0; i < count; i++) {
       const nextPos = new THREE.Vector3(
         prevPos.x + dx,
@@ -397,16 +486,7 @@ export default function App(){
       )
       const nodeId = threeRef.current.addNode(nextPos)
       if (!nodeId) break
-      const memberId = threeRef.current.addMember(prevId, nodeId)
-      if (memberId) {
-        pendingMemberMetaRef.current[memberId] = {
-          type: section.category || 'beam',
-          sectionId: section.id,
-          align: section.centroid === 'top' ? 'top' : 'center',
-          rotation: { x: 0, y: 0, z: 0 },
-          preview: 'shape',
-        }
-      }
+      createMemberWithMeta(prevId, nodeId, meta)
       prevId = nodeId
       prevPos = nextPos
     }
@@ -416,6 +496,9 @@ export default function App(){
     setLineDrawMode((prev) => {
       const next = !prev
       if (!next) setLineStartId(null)
+      if (next) {
+        setMultiSelectMode('none')
+      }
       return next
     })
   }
@@ -530,7 +613,7 @@ export default function App(){
       normalize.preview = 'shape'
     }
     const existing = model.members.find((m) => m.id === memberId) || {}
-    pendingMemberMetaRef.current[memberId] = {
+    const nextMeta = {
       type: normalize.type ?? existing.type ?? 'beam',
       align: normalize.align ?? existing.align ?? 'center',
       sectionId: normalize.sectionId ?? existing.sectionId ?? null,
@@ -538,6 +621,8 @@ export default function App(){
       detailing: normalize.detailing ?? existing.detailing ?? null,
       preview: normalize.preview ?? existing.preview ?? 'shape',
     }
+    pendingMemberMetaRef.current[memberId] = nextMeta
+    memberMetaRef.current[memberId] = nextMeta
     setModel((prev) => {
       const next = {
         ...prev,
@@ -632,15 +717,14 @@ export default function App(){
     const aId = threeRef.current.addNode(newA)
     const bId = threeRef.current.addNode(newB)
     if (!aId || !bId) return
-    const newMemberId = threeRef.current.addMember(aId, bId)
-    if (newMemberId) {
-      pendingMemberMetaRef.current[newMemberId] = {
-        type: member.type || 'beam',
-        sectionId: member.sectionId || null,
-        align: member.align || 'center',
-        rotation: member.rotation || { x: 0, y: 0, z: 0 },
-      }
-    }
+    createMemberWithMeta(aId, bId, {
+      type: member.type || 'beam',
+      sectionId: member.sectionId || null,
+      align: member.align || 'center',
+      rotation: member.rotation || { x: 0, y: 0, z: 0 },
+      preview: member.preview || 'shape',
+      detailing: member.detailing || null,
+    })
   }
 
   function splitSelectedMember(){
@@ -663,11 +747,11 @@ export default function App(){
       sectionId: member.sectionId || null,
       align: member.align || 'center',
       rotation: member.rotation || { x: 0, y: 0, z: 0 },
+      preview: member.preview || 'shape',
+      detailing: member.detailing || null,
     }
-    const m1 = threeRef.current.addMember(member.a, midId)
-    const m2 = threeRef.current.addMember(midId, member.b)
-    if (m1) pendingMemberMetaRef.current[m1] = meta
-    if (m2) pendingMemberMetaRef.current[m2] = meta
+    createMemberWithMeta(member.a, midId, meta)
+    createMemberWithMeta(midId, member.b, meta)
     if (typeof threeRef.current.deleteMember === 'function') {
       threeRef.current.deleteMember(member.id)
     }
@@ -714,32 +798,25 @@ export default function App(){
       sectionId: member.sectionId || null,
       align: member.align || 'center',
       rotation: member.rotation || { x: 0, y: 0, z: 0 },
+      preview: member.preview || 'shape',
       detailing: member.detailing || null,
     }
-    const m1 = threeRef.current.addMember(member.a, nodeId)
-    const m2 = threeRef.current.addMember(nodeId, member.b)
-    if (m1) pendingMemberMetaRef.current[m1] = meta
-    if (m2) pendingMemberMetaRef.current[m2] = meta
+    createMemberWithMeta(member.a, nodeId, meta)
+    createMemberWithMeta(nodeId, member.b, meta)
     if (typeof threeRef.current.deleteMember === 'function') {
       threeRef.current.deleteMember(member.id)
     }
     const other = pick.other
-    const m3 = threeRef.current.addMember(other.a, nodeId)
-    const m4 = threeRef.current.addMember(nodeId, other.b)
-    if (m3) pendingMemberMetaRef.current[m3] = {
+    const otherMeta = {
       type: other.type || 'beam',
       sectionId: other.sectionId || null,
       align: other.align || 'center',
       rotation: other.rotation || { x: 0, y: 0, z: 0 },
+      preview: other.preview || 'shape',
       detailing: other.detailing || null,
     }
-    if (m4) pendingMemberMetaRef.current[m4] = {
-      type: other.type || 'beam',
-      sectionId: other.sectionId || null,
-      align: other.align || 'center',
-      rotation: other.rotation || { x: 0, y: 0, z: 0 },
-      detailing: other.detailing || null,
-    }
+    createMemberWithMeta(other.a, nodeId, otherMeta)
+    createMemberWithMeta(nodeId, other.b, otherMeta)
     if (typeof threeRef.current.deleteMember === 'function') {
       threeRef.current.deleteMember(other.id)
     }
@@ -767,15 +844,14 @@ export default function App(){
     const collinear = Math.abs(v1.dot(v2)) > 0.99
     if (!collinear) return
     if (!threeRef.current) return
-    const newMemberId = threeRef.current.addMember(a1, b1)
-    if (newMemberId) {
-      pendingMemberMetaRef.current[newMemberId] = {
-        type: member.type || 'beam',
-        sectionId: member.sectionId || null,
-        align: member.align || 'center',
-        rotation: member.rotation || { x: 0, y: 0, z: 0 },
-      }
-    }
+    createMemberWithMeta(a1, b1, {
+      type: member.type || 'beam',
+      sectionId: member.sectionId || null,
+      align: member.align || 'center',
+      rotation: member.rotation || { x: 0, y: 0, z: 0 },
+      preview: member.preview || 'shape',
+      detailing: member.detailing || null,
+    })
     if (typeof threeRef.current.deleteMember === 'function') {
       threeRef.current.deleteMember(member.id)
       threeRef.current.deleteMember(other.id)
@@ -888,11 +964,11 @@ export default function App(){
         sectionId: member.sectionId || null,
         align: member.align || 'center',
         rotation: member.rotation || { x: 0, y: 0, z: 0 },
+        preview: member.preview || 'shape',
         detailing: member.detailing || null,
       }
       for (let i = 0; i < chain.length - 1; i++){
-        const newMemberId = threeRef.current.addMember(chain[i], chain[i + 1])
-        if (newMemberId) pendingMemberMetaRef.current[newMemberId] = meta
+        createMemberWithMeta(chain[i], chain[i + 1], meta)
       }
       if (typeof threeRef.current.deleteMember === 'function') {
         threeRef.current.deleteMember(member.id)
@@ -1092,6 +1168,8 @@ export default function App(){
             sections={mergedSections}
             onSelect={(sel)=>{
               if (!sel || !threeRef.current) return
+              if (multiSelectMode === 'nodes' && sel.type !== 'node') return
+              if (multiSelectMode === 'members' && sel.type !== 'member') return
               if (sel.type === 'member' && typeof threeRef.current.selectMember === 'function') {
                 threeRef.current.selectMember(sel.id)
               } else if (sel.type === 'footing' && typeof threeRef.current.selectFooting === 'function') {
@@ -1125,6 +1203,7 @@ export default function App(){
                     { key: 'constraints', label: 'Constraints' },
                     { key: 'duplicate', label: 'Duplicate' },
                     { key: 'extrude', label: 'Extrude' },
+                    { key: 'multi', label: 'Multi-Select' },
                   ].map((item) => (
                     <button
                       key={item.key}
@@ -1189,6 +1268,43 @@ export default function App(){
                       {lineStartId ? 'Start node selected. Pick end node.' : 'Pick two nodes to create a member.'}
                     </div>
                   )}
+                </div>
+                )}
+
+                {panelOpen.multi && (
+                <div style={{display:'flex', alignItems:'center', gap:10, marginTop:10, flexWrap:'wrap'}}>
+                  <div style={{fontWeight:600}}>Multi-Select</div>
+                  <button
+                    onClick={() => handleSetMultiSelectMode('nodes')}
+                    style={{
+                      padding:'6px 10px',
+                      background: multiSelectMode === 'nodes' ? '#0b5fff' : '#e2e8f0',
+                      color: multiSelectMode === 'nodes' ? '#fff' : '#111',
+                      border:'none',
+                      borderRadius:4,
+                    }}
+                  >
+                    Nodes
+                  </button>
+                  <button
+                    onClick={() => handleSetMultiSelectMode('members')}
+                    style={{
+                      padding:'6px 10px',
+                      background: multiSelectMode === 'members' ? '#0b5fff' : '#e2e8f0',
+                      color: multiSelectMode === 'members' ? '#fff' : '#111',
+                      border:'none',
+                      borderRadius:4,
+                    }}
+                  >
+                    Members
+                  </button>
+                  <div style={{fontSize:12, color:'#64748b'}}>
+                    {multiSelectMode === 'nodes'
+                      ? 'Selecting nodes only'
+                      : multiSelectMode === 'members'
+                        ? 'Selecting members only'
+                        : 'Normal selection'}
+                  </div>
                 </div>
                 )}
 
@@ -1903,17 +2019,19 @@ export default function App(){
           </div>
           {showScene && (
             <div style={{flex:1}}>
-              <ThreeScene
-                ref={threeRef}
-                model={model}
-                sections={mergedSections}
-                initialModel={initialModelRef.current}
+                <ThreeScene
+                  ref={threeRef}
+                  model={model}
+                  sections={mergedSections}
+                  initialModel={initialModelRef.current}
                 floors={model.floors}
                 nglElevation={model.ngl}
                 showGrid={!!model.showGrid}
                 showVerticalGrid={!!model.showVerticalGrid}
-                viewMode={viewMode}
-                snapToLevel={!!model.snapToLevel}
+                  viewMode={viewMode}
+                  multiSelectMode={multiSelectMode}
+                  lineDrawMode={lineDrawMode}
+                  snapToLevel={!!model.snapToLevel}
                 activeLevelId={model.activeLevelId}
                 axisLock={model.axisLock}
                 constrainMembers={!!model.constrainMembers}

@@ -32,7 +32,9 @@ const ThreeScene = forwardRef((props, ref) => {
   const selectedRef = useRef(null)
   const selectedMembersRef = useRef(new Set())
   const selectedNodesRef = useRef(new Set())
+  const lineDrawStartRef = useRef(null)
   const controlsRef = useRef(null)
+  const rotateHoldRef = useRef({ timer: null, active: false })
   const setRotateModeRef = useRef(null)
   const addNodeRef = useRef(null)
   const addMemberRef = useRef(null)
@@ -75,11 +77,11 @@ const ThreeScene = forwardRef((props, ref) => {
     nodesRef.current.forEach((n) => {
       if (!n.material?.emissive) return
       if (n.userData.id === primary) {
-        n.material.emissive.setHex(0x222222)
+        n.material.emissive.setHex(0xff0000)
         return
       }
       if (selectedNodesRef.current.has(n.userData.id)) {
-        n.material.emissive.setHex(0x333333)
+        n.material.emissive.setHex(0xff0000)
         return
       }
       n.material.emissive.setHex(0x000000)
@@ -276,12 +278,12 @@ const ThreeScene = forwardRef((props, ref) => {
       }
       return null
     },
-    addMember: (aId, bId) => {
+    addMember: (aId, bId, forcedId) => {
       if (!addMemberRef.current) return null
       const a = nodesRef.current.find(n=>n.userData.id===aId)
       const b = nodesRef.current.find(n=>n.userData.id===bId)
       if (!a || !b) return null
-      const m = addMemberRef.current(a, b)
+      const m = addMemberRef.current(a, b, forcedId)
       return m?.id
     },
     addFooting: (nodeId, size) => {
@@ -473,7 +475,17 @@ const ThreeScene = forwardRef((props, ref) => {
     // omit demo geometry for a clean scene
 
     // --- Helpers ---
-    function addNode(pos, forcedId) {
+    function addNode(pos, forcedId, suppressEmit) {
+      if (!forcedId) {
+        const eps = 1e-6
+        const exists = nodesRef.current.some((n) => {
+          const p = n.position
+          return Math.abs(p.x - pos.x) < eps &&
+            Math.abs(p.y - pos.y) < eps &&
+            Math.abs(p.z - pos.z) < eps
+        })
+        if (exists) return null
+      }
       const geo = new THREE.SphereGeometry(0.12, 12, 12)
       const mat = new THREE.MeshStandardMaterial({ color: 0xff9900 })
       const s = new THREE.Mesh(geo, mat)
@@ -481,12 +493,12 @@ const ThreeScene = forwardRef((props, ref) => {
       s.position.copy(pos)
       scene.add(s)
       nodesRef.current.push(s)
-      emitSceneChange()
+      if (!suppressEmit) emitSceneChange()
       return s
     }
     addNodeRef.current = addNode
 
-    function addFooting(nodeMesh, size, forcedId, offset, rotation) {
+    function addFooting(nodeMesh, size, forcedId, offset, rotation, suppressEmit) {
       const footingSize = size || { x: 1, y: 0.4, z: 1 }
       const off = offset || { x: 0, y: 0, z: 0 }
       const rot = rotation || { x: 0, y: 0, z: 0 }
@@ -514,13 +526,22 @@ const ThreeScene = forwardRef((props, ref) => {
         offset: off,
         rotation: rot,
       })
-      emitSceneChange()
+      if (!suppressEmit) emitSceneChange()
       addFootingRef.current = addFooting
       return { id: mesh.userData.id }
     }
     addFootingRef.current = addFooting
 
-    function addMember(aNode, bNode, forcedId, offsetY) {
+    function addMember(aNode, bNode, forcedId, offsetY, suppressEmit) {
+      const aId = aNode.userData?.id
+      const bId = bNode.userData?.id
+      if (aId && bId) {
+        const duplicate = membersRef.current.some((m) =>
+          (m.aNode.userData.id === aId && m.bNode.userData.id === bId) ||
+          (m.aNode.userData.id === bId && m.bNode.userData.id === aId)
+        )
+        if (duplicate) return null
+      }
       const a = aNode.position.clone()
       const b = bNode.position.clone()
       const geom = new THREE.BufferGeometry().setFromPoints([a, b])
@@ -540,7 +561,7 @@ const ThreeScene = forwardRef((props, ref) => {
       ln.userData = ln.userData || {}
       ln.userData.id = m.id
       membersRef.current.push(m)
-      emitSceneChange()
+      if (!suppressEmit) emitSceneChange()
       return m
     }
     addMemberRef.current = addMember
@@ -627,11 +648,20 @@ const ThreeScene = forwardRef((props, ref) => {
 
     function pickNode(ev) {
       setMouseFromEvent(ev)
-      const objects = [
-        ...nodesRef.current,
-        ...membersRef.current.flatMap((m) => [m.line, m.mesh].filter(Boolean)),
-        ...footingsRef.current.map((f) => f.mesh),
-      ]
+      const selectionMode = props.lineDrawMode ? 'line' : (props.multiSelectMode || 'none')
+      const nodesOnly = selectionMode === 'nodes'
+      const membersOnly = selectionMode === 'members'
+      const objects = nodesOnly
+        ? [...nodesRef.current]
+        : membersOnly
+          ? [
+              ...membersRef.current.flatMap((m) => [m.line, m.mesh].filter(Boolean)),
+            ]
+          : [
+              ...nodesRef.current,
+              ...membersRef.current.flatMap((m) => [m.line, m.mesh].filter(Boolean)),
+              ...footingsRef.current.map((f) => f.mesh),
+            ]
       const hits = raycaster.intersectObjects(objects, false)
       if (!hits || !hits.length) return null
       const obj = hits[0].object
@@ -669,6 +699,7 @@ const ThreeScene = forwardRef((props, ref) => {
         updateAttachedFootings(selectedRef.current)
       }
       const newNode = addNode(pos)
+      if (!newNode) return
 
       if (tool === 'extrude' && selectedRef.current) {
         addMember(selectedRef.current, newNode)
@@ -684,6 +715,13 @@ const ThreeScene = forwardRef((props, ref) => {
 
     function onPointerDown(ev) {
       const hit = pickNode(ev)
+      if (!rotateModeRef.current && ev.button === 0 && !hit) {
+        if (rotateHoldRef.current.timer) clearTimeout(rotateHoldRef.current.timer)
+        rotateHoldRef.current.timer = setTimeout(() => {
+          rotateHoldRef.current.active = true
+          setRotateMode(true)
+        }, 220)
+      }
       if (rotateModeRef.current && !hit) {
         return
       }
@@ -702,6 +740,7 @@ const ThreeScene = forwardRef((props, ref) => {
         return
       }
 
+      const selectionMode = props.lineDrawMode ? 'line' : (props.multiSelectMode || 'none')
       if (hit.type === 'node') {
         const node = hit.object
         dragTarget = null
@@ -710,7 +749,7 @@ const ThreeScene = forwardRef((props, ref) => {
 
         selectedMembersRef.current.clear()
         refreshMemberVisuals()
-        const isMulti = !!ev.shiftKey
+        const isMulti = !!ev.shiftKey || selectionMode === 'nodes'
         if (!isMulti) {
           selectedNodesRef.current.clear()
         }
@@ -750,10 +789,19 @@ const ThreeScene = forwardRef((props, ref) => {
         setSelectedId(node.userData.id)
         props.onSelectionChange && props.onSelectionChange({ type: 'node', id: node.userData.id, multiNodes: Array.from(selectedNodesRef.current) })
         refreshNodeVisuals()
+        if (props.lineDrawMode) {
+          const start = lineDrawStartRef.current
+          if (start && start !== node) {
+            addMember(start, node)
+            lineDrawStartRef.current = null
+          } else {
+            lineDrawStartRef.current = node
+          }
+        }
       } else if (hit.type === 'member') {
         // select member
         const member = hit.object
-        const isMulti = !!ev.shiftKey
+        const isMulti = !!ev.shiftKey || selectionMode === 'members'
         if (selectedRef.current) {
           selectedRef.current.material?.emissive?.setHex?.(0x000000)
           selectedRef.current = null
@@ -790,6 +838,7 @@ const ThreeScene = forwardRef((props, ref) => {
         props.onSelectionChange && props.onSelectionChange({ type: 'member', id: member.id, multi: Array.from(selectedMembersRef.current) })
         refreshMemberVisuals()
       } else if (hit.type === 'footing') {
+        if (selectionMode === 'members') return
         const footing = hit.object
         selectedMembersRef.current.clear()
         refreshMemberVisuals()
@@ -864,6 +913,14 @@ const ThreeScene = forwardRef((props, ref) => {
     }
 
     function onPointerUp() {
+      if (rotateHoldRef.current.timer) {
+        clearTimeout(rotateHoldRef.current.timer)
+        rotateHoldRef.current.timer = null
+      }
+      if (rotateHoldRef.current.active) {
+        rotateHoldRef.current.active = false
+        setRotateMode(false)
+      }
       if (rotateModeRef.current && controlsRef.current) {
         controlsRef.current.enableRotate = true
       }
@@ -965,7 +1022,7 @@ const ThreeScene = forwardRef((props, ref) => {
       if (!member || member.align !== 'top') return 0
       const section = member.sectionId && sectionsById ? sectionsById[member.sectionId] : null
       const h = section?.dims?.h
-      return typeof h === 'number' ? h / 2 : 0
+      return typeof h === 'number' ? -h / 2 : 0
     }
 
     function getMemberSectionDims(section) {
@@ -1382,20 +1439,21 @@ const ThreeScene = forwardRef((props, ref) => {
       nodeList.forEach((n) => {
         if (!n || !n.position) return
         const pos = new THREE.Vector3(n.position.x, n.position.y, n.position.z)
-        const mesh = addNode(pos, n.id)
+        const mesh = addNode(pos, n.id, true)
         nodesById[n.id] = mesh
       })
       const memberList = Array.isArray(model.members) ? model.members : []
       memberList.forEach((m) => {
         const a = nodesById[m.a]
         const b = nodesById[m.b]
-        if (a && b) addMember(a, b, m.id, getMemberOffsetY(m, sectionsById))
+        if (a && b) addMember(a, b, m.id, getMemberOffsetY(m, sectionsById), true)
       })
       const footingList = Array.isArray(model.footings) ? model.footings : []
       footingList.forEach((f) => {
         const node = nodesById[f.nodeId]
-        if (node) addFooting(node, f.size, f.id, f.offset, f.rotation)
+        if (node) addFooting(node, f.size, f.id, f.offset, f.rotation, true)
       })
+      emitSceneChange()
       updateMemberMeshes(model, sectionsById)
       if (model.selection && model.selection.id) {
         if (model.selection.type === 'node') {
@@ -1519,7 +1577,13 @@ const ThreeScene = forwardRef((props, ref) => {
 
       if (el.contains(renderer.domElement)) el.removeChild(renderer.domElement)
     }
-  }, [snapEnabled, gridSize, gridDivisions, tool, props.floors, props.nglElevation, props.showGrid, props.showVerticalGrid, props.snapToLevel, props.activeLevelId, props.axisLock, props.constrainMembers])
+  }, [snapEnabled, gridSize, gridDivisions, tool, props.floors, props.nglElevation, props.showGrid, props.showVerticalGrid, props.snapToLevel, props.activeLevelId, props.axisLock, props.constrainMembers, props.multiSelectMode, props.lineDrawMode])
+
+  useEffect(() => {
+    if (!props.lineDrawMode) {
+      lineDrawStartRef.current = null
+    }
+  }, [props.lineDrawMode])
 
   useEffect(() => {
     if (props.model && updateMemberOffsetsRef.current) {
