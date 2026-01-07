@@ -456,21 +456,18 @@ export default function App(){
     const baseNodeId = model.selection?.type === 'node'
       ? model.selection.id
       : lastSelectedNodeIdRef.current
-    if (!baseNodeId) return
+    const targetNodeIds = multiSelectMode === 'nodes' && multiNodeIds.length
+      ? multiNodeIds
+      : baseNodeId ? [baseNodeId] : []
+    if (!targetNodeIds.length) return
     if (!threeRef.current || typeof threeRef.current.addNode !== 'function' || typeof threeRef.current.addMember !== 'function') return
     const section = mergedSections.find((s) => s.id === extrudeForm.sectionId)
     if (!section) return
     const sceneNodes = typeof threeRef.current.getNodes === 'function' ? threeRef.current.getNodes() : []
-    const baseNode = model.nodes.find((n) => n.id === baseNodeId)
-    const baseSceneNode = sceneNodes.find((n) => n.id === baseNodeId)
-    const basePos = baseNode?.position || baseSceneNode?.position
-    if (!basePos) return
     const dx = Number(extrudeForm.dx) || 0
     const dy = Number(extrudeForm.dy) || 0
     const dz = Number(extrudeForm.dz) || 0
     const count = Math.max(1, Number(extrudeForm.count) || 1)
-    let prevId = baseNodeId
-    let prevPos = new THREE.Vector3(basePos.x, basePos.y, basePos.z)
     const meta = {
       type: section.category || 'beam',
       sectionId: section.id,
@@ -478,18 +475,26 @@ export default function App(){
       rotation: { x: 0, y: 0, z: 0 },
       preview: 'shape',
     }
-    for (let i = 0; i < count; i++) {
-      const nextPos = new THREE.Vector3(
-        prevPos.x + dx,
-        prevPos.y + dy,
-        prevPos.z + dz
-      )
-      const nodeId = threeRef.current.addNode(nextPos)
-      if (!nodeId) break
-      createMemberWithMeta(prevId, nodeId, meta)
-      prevId = nodeId
-      prevPos = nextPos
-    }
+    targetNodeIds.forEach((nodeId) => {
+      const baseNode = model.nodes.find((n) => n.id === nodeId)
+      const baseSceneNode = sceneNodes.find((n) => n.id === nodeId)
+      const basePos = baseNode?.position || baseSceneNode?.position
+      if (!basePos) return
+      let prevId = nodeId
+      let prevPos = new THREE.Vector3(basePos.x, basePos.y, basePos.z)
+      for (let i = 0; i < count; i++) {
+        const nextPos = new THREE.Vector3(
+          prevPos.x + dx,
+          prevPos.y + dy,
+          prevPos.z + dz
+        )
+        const newNodeId = threeRef.current.addNode(nextPos)
+        if (!newNodeId) break
+        createMemberWithMeta(prevId, newNodeId, meta)
+        prevId = newNodeId
+        prevPos = nextPos
+      }
+    })
   }
 
   function toggleLineDraw(){
@@ -691,11 +696,29 @@ export default function App(){
     const node = model.nodes.find((n) => n.id === model.selection.id)
     if (!node) return
     const pos = node.position
+    const offset = {
+      x: Number(dupOffset.x) || 0,
+      y: Number(dupOffset.y) || 0,
+      z: Number(dupOffset.z) || 0,
+    }
     const nextPos = new THREE.Vector3(
-      (pos?.x || 0) + (dupOffset.x || 0),
-      (pos?.y || 0) + (dupOffset.y || 0),
-      (pos?.z || 0) + (dupOffset.z || 0)
+      (pos?.x || 0) + offset.x,
+      (pos?.y || 0) + offset.y,
+      (pos?.z || 0) + offset.z
     )
+    const eps = 1e-6
+    const existing = model.nodes.find((n) => {
+      const p = n.position || {}
+      return Math.abs((p.x || 0) - nextPos.x) < eps &&
+        Math.abs((p.y || 0) - nextPos.y) < eps &&
+        Math.abs((p.z || 0) - nextPos.z) < eps
+    })
+    if (existing) {
+      if (threeRef.current && typeof threeRef.current.selectNode === 'function') {
+        threeRef.current.selectNode(existing.id)
+      }
+      return
+    }
     if (threeRef.current && typeof threeRef.current.addNode === 'function'){
       threeRef.current.addNode(nextPos)
     }
@@ -708,14 +731,31 @@ export default function App(){
     const a = model.nodes.find((n) => n.id === member.a)
     const b = model.nodes.find((n) => n.id === member.b)
     if (!a || !b) return
-    const offset = dupOffset
+    const offset = {
+      x: Number(dupOffset.x) || 0,
+      y: Number(dupOffset.y) || 0,
+      z: Number(dupOffset.z) || 0,
+    }
     const aPos = a.position || { x: 0, y: 0, z: 0 }
     const bPos = b.position || { x: 0, y: 0, z: 0 }
-    const newA = new THREE.Vector3(aPos.x + (offset.x || 0), aPos.y + (offset.y || 0), aPos.z + (offset.z || 0))
-    const newB = new THREE.Vector3(bPos.x + (offset.x || 0), bPos.y + (offset.y || 0), bPos.z + (offset.z || 0))
+    const newA = new THREE.Vector3(aPos.x + offset.x, aPos.y + offset.y, aPos.z + offset.z)
+    const newB = new THREE.Vector3(bPos.x + offset.x, bPos.y + offset.y, bPos.z + offset.z)
     if (!threeRef.current || typeof threeRef.current.addNode !== 'function' || typeof threeRef.current.addMember !== 'function') return
-    const aId = threeRef.current.addNode(newA)
-    const bId = threeRef.current.addNode(newB)
+    const eps = 1e-6
+    const existingA = model.nodes.find((n) => {
+      const p = n.position || {}
+      return Math.abs((p.x || 0) - newA.x) < eps &&
+        Math.abs((p.y || 0) - newA.y) < eps &&
+        Math.abs((p.z || 0) - newA.z) < eps
+    })
+    const existingB = model.nodes.find((n) => {
+      const p = n.position || {}
+      return Math.abs((p.x || 0) - newB.x) < eps &&
+        Math.abs((p.y || 0) - newB.y) < eps &&
+        Math.abs((p.z || 0) - newB.z) < eps
+    })
+    const aId = existingA?.id || threeRef.current.addNode(newA)
+    const bId = existingB?.id || threeRef.current.addNode(newB)
     if (!aId || !bId) return
     createMemberWithMeta(aId, bId, {
       type: member.type || 'beam',
@@ -1428,7 +1468,7 @@ export default function App(){
                         type="number"
                         step="0.1"
                         value={extrudeForm.dx}
-                        onChange={(e)=> setExtrudeForm(s => ({ ...s, dx: Number(e.target.value) || 0 }))}
+                        onChange={(e)=> setExtrudeForm(s => ({ ...s, dx: e.target.value }))}
                         style={{width:70, marginLeft:6}}
                       />
                       <span style={{marginLeft:6, color:'#64748b'}}>m</span>
@@ -1439,7 +1479,7 @@ export default function App(){
                         type="number"
                         step="0.1"
                         value={extrudeForm.dy}
-                        onChange={(e)=> setExtrudeForm(s => ({ ...s, dy: Number(e.target.value) || 0 }))}
+                        onChange={(e)=> setExtrudeForm(s => ({ ...s, dy: e.target.value }))}
                         style={{width:70, marginLeft:6}}
                       />
                       <span style={{marginLeft:6, color:'#64748b'}}>m</span>
@@ -1450,7 +1490,7 @@ export default function App(){
                         type="number"
                         step="0.1"
                         value={extrudeForm.dz}
-                        onChange={(e)=> setExtrudeForm(s => ({ ...s, dz: Number(e.target.value) || 0 }))}
+                        onChange={(e)=> setExtrudeForm(s => ({ ...s, dz: e.target.value }))}
                         style={{width:70, marginLeft:6}}
                       />
                       <span style={{marginLeft:6, color:'#64748b'}}>m</span>
@@ -1800,7 +1840,7 @@ export default function App(){
                   type="number"
                   step="0.1"
                   value={dupOffset.x}
-                  onChange={(e)=> setDupOffset(s => ({ ...s, x: Number(e.target.value) || 0 }))}
+                  onChange={(e)=> setDupOffset(s => ({ ...s, x: e.target.value }))}
                   style={{width:70, marginLeft:6}}
                 />
               </label>
@@ -1810,7 +1850,7 @@ export default function App(){
                   type="number"
                   step="0.1"
                   value={dupOffset.y}
-                  onChange={(e)=> setDupOffset(s => ({ ...s, y: Number(e.target.value) || 0 }))}
+                  onChange={(e)=> setDupOffset(s => ({ ...s, y: e.target.value }))}
                   style={{width:70, marginLeft:6}}
                 />
               </label>
@@ -1820,7 +1860,7 @@ export default function App(){
                   type="number"
                   step="0.1"
                   value={dupOffset.z}
-                  onChange={(e)=> setDupOffset(s => ({ ...s, z: Number(e.target.value) || 0 }))}
+                  onChange={(e)=> setDupOffset(s => ({ ...s, z: e.target.value }))}
                   style={{width:70, marginLeft:6}}
                 />
               </label>

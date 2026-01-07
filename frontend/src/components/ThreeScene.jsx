@@ -53,12 +53,17 @@ const ThreeScene = forwardRef((props, ref) => {
     if (!m || !m.line) return
     if (mode === 'primary') {
       m.line.material && m.line.material.color.setHex(primaryLineColor)
-      m.mesh?.material?.emissive?.setHex?.(0x222222)
+      m.line.visible = true
+      m.mesh?.material?.emissive?.setHex?.(0xff0000)
     } else if (mode === 'multi') {
       m.line.material && m.line.material.color.setHex(multiLineColor)
-      m.mesh?.material?.emissive?.setHex?.(0x553300)
+      m.line.visible = true
+      m.mesh?.material?.emissive?.setHex?.(0xffa500)
     } else {
       m.line.material && m.line.material.color.setHex(baseLineColor)
+      if (typeof m.preview === 'string') {
+        m.line.visible = m.preview === 'line' || !m.sectionDims
+      }
       m.mesh?.material?.emissive?.setHex?.(0x000000)
     }
   }
@@ -509,7 +514,7 @@ const ThreeScene = forwardRef((props, ref) => {
       mesh.userData.type = 'footing'
       mesh.position.set(
         nodeMesh.position.x + off.x,
-        nodeMesh.position.y - footingSize.y / 2 + off.y,
+        nodeMesh.position.y - footingSize.y / 2,
         nodeMesh.position.z + off.z
       )
       mesh.rotation.set(
@@ -624,7 +629,7 @@ const ThreeScene = forwardRef((props, ref) => {
         const off = f.offset || { x: 0, y: 0, z: 0 }
         f.mesh.position.set(
           nodeMesh.position.x + off.x,
-          nodeMesh.position.y - size.y / 2 + off.y,
+          nodeMesh.position.y - size.y / 2,
           nodeMesh.position.z + off.z
         )
       })
@@ -634,6 +639,7 @@ const ThreeScene = forwardRef((props, ref) => {
     // --- Interaction ---
     const raycaster = new THREE.Raycaster()
     const mouse = new THREE.Vector2()
+    raycaster.params.Line.threshold = 0.15
 
     let dragging = false
     let dragTarget = null
@@ -957,7 +963,8 @@ const ThreeScene = forwardRef((props, ref) => {
         props.onSelectionChange && props.onSelectionChange({ type: null, id: null })
         return
       }
-      if (ev.key === 'Delete' || ev.key === 'Backspace'){
+      if (ev.key === 'Backspace') return
+      if (ev.key === 'Delete'){
         if (selectedRef.current){
           const id = selectedRef.current.userData.id
           if (props.onRequestDelete){
@@ -1349,6 +1356,7 @@ const ThreeScene = forwardRef((props, ref) => {
           if (m.mesh) m.mesh.visible = false
           m.line.visible = true
           m.sectionDims = null
+          m.preview = preview
           return
         }
         let wDims = null
@@ -1424,6 +1432,7 @@ const ThreeScene = forwardRef((props, ref) => {
         m.mesh.visible = true
         m.line.visible = false
         m.sectionDims = dims
+        m.preview = preview
         m.offsetY = getMemberOffsetY(meta, sectionsById)
         updateMemberMeshTransform(m)
       })

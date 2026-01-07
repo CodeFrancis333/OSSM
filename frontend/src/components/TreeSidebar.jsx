@@ -22,15 +22,27 @@ function TreeNode({node, depth=0, onSelect, onRequestDelete, onRequestDeleteMemb
         {node.id ? (
           <div style={{display:'flex', alignItems:'center', gap:6}}>
             {node.type === 'member' && onUpdateMember && (
-              <button
-                onClick={(e)=>{
-                  e.stopPropagation()
-                  const nextPreview = node.preview === 'line' ? 'shape' : 'line'
-                  onUpdateMember(node.id, { preview: nextPreview })
-                }}
-              >
-                {node.preview === 'line' ? 'Shape' : 'Line'}
-              </button>
+              <>
+                <button
+                  onClick={(e)=>{
+                    e.stopPropagation()
+                    const nextPreview = node.preview === 'line' ? 'shape' : 'line'
+                    onUpdateMember(node.id, { preview: nextPreview })
+                  }}
+                >
+                  {node.preview === 'line' ? 'Shape' : 'Line'}
+                </button>
+                {node.sectionId && (
+                  <button
+                    onClick={(e)=>{
+                      e.stopPropagation()
+                      onUpdateMember(node.id, { sectionId: null, preview: 'line' })
+                    }}
+                  >
+                    Unassign
+                  </button>
+                )}
+              </>
             )}
             <button
               onClick={(e)=>{
