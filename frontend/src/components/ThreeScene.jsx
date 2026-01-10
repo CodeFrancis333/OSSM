@@ -866,7 +866,7 @@ const ThreeScene = forwardRef((props, ref) => {
         selectedFootingRef.current = footing
         setSelectedId(null)
         props.onSelectionChange && props.onSelectionChange({ type: 'footing', id: footing.id })
-        footing.mesh.material?.emissive?.setHex?.(0x222222)
+        footing.mesh.material?.emissive?.setHex?.(0xff0000)
       }
     }
 
@@ -939,6 +939,10 @@ const ThreeScene = forwardRef((props, ref) => {
     }
 
     function onKeyDown(ev){
+      if (ev.key === 'Alt') {
+        setRotateMode(true)
+        return
+      }
       if (ev.key === 'Escape') {
         setRotateMode(false)
         if (selectedRef.current) {
@@ -999,6 +1003,12 @@ const ThreeScene = forwardRef((props, ref) => {
     }
 
     window.addEventListener('keydown', onKeyDown)
+    function onKeyUp(ev){
+      if (ev.key === 'Alt') {
+        setRotateMode(false)
+      }
+    }
+    window.addEventListener('keyup', onKeyUp)
 
     function onContextMenu(ev) {
       ev.preventDefault()
@@ -1328,6 +1338,10 @@ const ThreeScene = forwardRef((props, ref) => {
         dir.normalize()
       )
       m.mesh.setRotationFromQuaternion(quat)
+      const beta = Number(m.beta) || 0
+      if (beta) {
+        m.mesh.rotateX(THREE.MathUtils.degToRad(beta))
+      }
       if (m.mesh.userData && m.mesh.userData.baseLen === 1) {
         m.mesh.scale.set(len, 1, 1)
       }
@@ -1344,6 +1358,7 @@ const ThreeScene = forwardRef((props, ref) => {
         const section = meta?.sectionId ? sectionsById[meta.sectionId] : null
         const dims = getMemberSectionDims(section)
         const preview = meta?.preview || 'shape'
+        const beta = Number(meta?.beta) || 0
         const hasSection = !!section
         const forceLines = viewMode === 'lines' && !hasSection
         if (forceRebars) {
@@ -1432,6 +1447,7 @@ const ThreeScene = forwardRef((props, ref) => {
         m.mesh.visible = true
         m.line.visible = false
         m.sectionDims = dims
+        m.beta = beta
         m.preview = preview
         m.offsetY = getMemberOffsetY(meta, sectionsById)
         updateMemberMeshTransform(m)
@@ -1488,7 +1504,7 @@ const ThreeScene = forwardRef((props, ref) => {
           if (selectedFooting) {
             selectedFootingRef.current = selectedFooting
             setSelectedId(null)
-            selectedFooting.mesh.material?.emissive?.setHex?.(0x222222)
+            selectedFooting.mesh.material?.emissive?.setHex?.(0xff0000)
           }
         }
       }
@@ -1509,6 +1525,39 @@ const ThreeScene = forwardRef((props, ref) => {
         m.line.geometry.setAttribute('position', new THREE.BufferAttribute(arr, 3))
         m.line.geometry.attributes.position.needsUpdate = true
         m.line.geometry.computeBoundingSphere()
+      })
+      const footingsById = Object.fromEntries((model.footings || []).map((f) => [f.id, f]))
+      footingsRef.current.forEach((f) => {
+        const meta = footingsById[f.id]
+        if (!meta) return
+        const nextSize = meta.size || f.size
+        if (nextSize) {
+          const sizeChanged = !f.size ||
+            f.size.x !== nextSize.x ||
+            f.size.y !== nextSize.y ||
+            f.size.z !== nextSize.z
+          if (sizeChanged) {
+            f.mesh.geometry.dispose()
+            f.mesh.geometry = new THREE.BoxGeometry(nextSize.x, nextSize.y, nextSize.z)
+            f.size = nextSize
+          }
+        }
+        const off = meta.offset || f.offset || { x: 0, y: 0, z: 0 }
+        f.offset = off
+        f.mesh.position.set(
+          f.mesh.position.x,
+          f.mesh.position.y,
+          f.mesh.position.z
+        )
+        const nodeMesh = nodesRef.current.find((n) => n.userData.id === meta.nodeId)
+        if (nodeMesh) {
+          const size = f.size || { x: 1, y: 0.4, z: 1 }
+          f.mesh.position.set(
+            nodeMesh.position.x + off.x,
+            nodeMesh.position.y - size.y / 2,
+            nodeMesh.position.z + off.z
+          )
+        }
       })
       updateMemberMeshes(model, sectionsById)
     }
@@ -1580,6 +1629,7 @@ const ThreeScene = forwardRef((props, ref) => {
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
       renderer.domElement.removeEventListener('contextmenu', onContextMenu)
       window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
 
       controls.dispose()
       renderer.dispose()

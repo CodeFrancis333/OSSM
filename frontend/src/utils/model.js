@@ -9,6 +9,26 @@ function normalizeSelection(selection) {
   return { type, id }
 }
 
+function parseNumber(value) {
+  const s = String(value ?? '').trim()
+  if (!s) return NaN
+  const mixed = s.match(/^(\d+)\s*-\s*(\d+)\s*\/\s*(\d+)$/)
+  if (mixed) {
+    const whole = Number(mixed[1])
+    const num = Number(mixed[2])
+    const den = Number(mixed[3])
+    if (den) return whole + num / den
+  }
+  const frac = s.match(/^(\d+)\s*\/\s*(\d+)$/)
+  if (frac) {
+    const num = Number(frac[1])
+    const den = Number(frac[2])
+    if (den) return num / den
+  }
+  const num = Number(s)
+  return Number.isFinite(num) ? num : NaN
+}
+
 export function createEmptyModel() {
   return {
     nodes: [],
@@ -36,7 +56,21 @@ export function normalizeModel(raw) {
     floors: Array.isArray(raw.floors) ? raw.floors : [],
     ngl: typeof raw.ngl === 'number' ? raw.ngl : 0,
     sections: Array.isArray(raw.sections)
-      ? raw.sections.map((s) => ({ ...s, material: s?.material || 'rc' }))
+      ? raw.sections.map((s) => {
+          const material = s?.material || 'rc'
+          if (material === 'steel' && s?.aiscDims) {
+            const units = String(s.aiscUnits || s.units || '').toLowerCase()
+            const scale = units === 'metric' ? 0.001 : 0.0254
+            const bRaw = parseNumber(s.aiscDims.bf ?? s.aiscDims.b ?? s.aiscDims.B)
+            const hRaw = parseNumber(s.aiscDims.d ?? s.aiscDims.Ht ?? s.aiscDims.h)
+            const dims = {
+              b: Number.isFinite(bRaw) ? bRaw * scale : 0,
+              h: Number.isFinite(hRaw) ? hRaw * scale : 0,
+            }
+            return { ...s, material, dims }
+          }
+          return { ...s, material }
+        })
       : [],
     snapToLevel: typeof raw.snapToLevel === 'boolean' ? raw.snapToLevel : false,
     activeLevelId: typeof raw.activeLevelId === 'string' ? raw.activeLevelId : null,

@@ -61,6 +61,15 @@ export default function App(){
   const [extrudeForm, setExtrudeForm] = useState({ sectionId: '', dx: 0, dy: 0, dz: 0, count: 1 })
   const [memberSectionChoice, setMemberSectionChoice] = useState('')
   const [multiNodeIds, setMultiNodeIds] = useState([])
+  const [betaModalOpen, setBetaModalOpen] = useState(false)
+  const [betaValue, setBetaValue] = useState('0')
+  const [editSectionOpen, setEditSectionOpen] = useState(false)
+  const [editSectionForm, setEditSectionForm] = useState(null)
+  const [editAiscUnits, setEditAiscUnits] = useState('metric')
+  const [editAiscType, setEditAiscType] = useState('W')
+  const [editAiscShapes, setEditAiscShapes] = useState([])
+  const [editAiscLoading, setEditAiscLoading] = useState(false)
+  const [editAiscError, setEditAiscError] = useState('')
   const [panelOpen, setPanelOpen] = useState({
     nodes: true,
     member: false,
@@ -117,6 +126,7 @@ export default function App(){
         const type = pendingMeta?.type ?? cachedMeta?.type ?? prev?.type ?? 'beam'
         const align = pendingMeta?.align ?? cachedMeta?.align ?? prev?.align ?? (type === 'beam' ? 'top' : 'center')
         const sectionId = pendingMeta?.sectionId ?? cachedMeta?.sectionId ?? prev?.sectionId ?? null
+        const beta = Number(pendingMeta?.beta ?? cachedMeta?.beta ?? prev?.beta) || 0
         const rotation = pendingMeta?.rotation ?? cachedMeta?.rotation ?? prev?.rotation ?? { x: 0, y: 0, z: 0 }
         const preview = pendingMeta?.preview ?? cachedMeta?.preview ?? prev?.preview ?? 'shape'
         const detailing = pendingMeta?.detailing ?? cachedMeta?.detailing ?? prev?.detailing ?? null
@@ -126,6 +136,7 @@ export default function App(){
           type,
           align,
           sectionId,
+          beta,
           rotation,
           preview,
           detailing,
@@ -134,6 +145,7 @@ export default function App(){
           type,
           align,
           sectionId,
+          beta,
           rotation,
           preview,
           detailing,
@@ -269,6 +281,30 @@ export default function App(){
       setSectionForm((s) => ({ ...s, category: 'beam' }))
     }
   }, [sectionForm.material, sectionForm.category])
+
+  useEffect(() => {
+    if (!editSectionOpen || editSectionForm?.material !== 'steel') return
+    let cancelled = false
+    setEditAiscLoading(true)
+    setEditAiscError('')
+    fetch(`http://localhost:4000/api/aisc?units=${encodeURIComponent(editAiscUnits)}&type=${encodeURIComponent(editAiscType)}`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('aisc fetch failed'))))
+      .then((data) => {
+        if (cancelled) return
+        setEditAiscShapes(Array.isArray(data?.shapes) ? data.shapes : [])
+      })
+      .catch(() => {
+        if (cancelled) return
+        setEditAiscError('Failed to load AISC list.')
+        setEditAiscShapes([])
+      })
+      .finally(() => {
+        if (!cancelled) setEditAiscLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [editSectionOpen, editSectionForm?.material, editAiscUnits, editAiscType])
 
   useEffect(() => {
     if (detailTargetSectionId) return
@@ -442,6 +478,7 @@ export default function App(){
           type: meta?.type || 'beam',
           align: meta?.align || 'center',
           sectionId: meta?.sectionId || null,
+          beta: Number(meta?.beta) || 0,
           rotation: meta?.rotation || { x: 0, y: 0, z: 0 },
           preview: meta?.preview || 'shape',
           detailing: meta?.detailing || null,
@@ -524,11 +561,34 @@ export default function App(){
   function handleAddSection(){
     const name = sectionForm.name || `${sectionForm.category} ${model.sections.length + 1}`
     if (sectionForm.material === 'steel') {
+      const parseNumber = (value) => {
+        const s = String(value ?? '').trim()
+        if (!s) return NaN
+        const mixed = s.match(/^(\d+)\s*-\s*(\d+)\s*\/\s*(\d+)$/)
+        if (mixed) {
+          const whole = Number(mixed[1])
+          const num = Number(mixed[2])
+          const den = Number(mixed[3])
+          if (den) return whole + num / den
+        }
+        const frac = s.match(/^(\d+)\s*\/\s*(\d+)$/)
+        if (frac) {
+          const num = Number(frac[1])
+          const den = Number(frac[2])
+          if (den) return num / den
+        }
+        const num = Number(s)
+        return Number.isFinite(num) ? num : NaN
+      }
       const shape = aiscShapes.find((s) => s.label === sectionForm.steelShape || s.std === sectionForm.steelShape)
       if (!shape || !shape.dims) return
-      const b = Number(shape.dims.bf ?? shape.dims.b ?? shape.dims.B) || 0
-      const h = Number(shape.dims.d ?? shape.dims.Ht ?? shape.dims.h) || 0
-      const dims = { b, h }
+      const scale = aiscUnits === 'metric' ? 0.001 : 0.0254
+      const bRaw = parseNumber(shape.dims.bf ?? shape.dims.b ?? shape.dims.B)
+      const hRaw = parseNumber(shape.dims.d ?? shape.dims.Ht ?? shape.dims.h)
+      const dims = {
+        b: Number.isFinite(bRaw) ? bRaw * scale : 0,
+        h: Number.isFinite(hRaw) ? hRaw * scale : 0,
+      }
       applyModel(addSection(model, {
         name: name || shape.label || 'Steel Section',
         category: sectionForm.category,
@@ -608,6 +668,85 @@ export default function App(){
     applyModel(removeSection(model, id))
   }
 
+  function openEditSection(section){
+    if (!section) return
+    setEditSectionForm({
+      id: section.id,
+      name: section.name || '',
+      category: section.category || 'beam',
+      material: section.material || 'rc',
+      centroid: section.centroid || 'center',
+      b: section.dims?.b ?? 0.3,
+      h: section.dims?.h ?? 0.5,
+      l: section.dims?.l ?? section.dims?.b ?? 0.3,
+      steelType: section.steelType || 'W',
+      steelShape: section.steelShape || '',
+      aiscUnits: section.aiscUnits || 'metric',
+    })
+    setEditAiscUnits(section.aiscUnits || 'metric')
+    setEditAiscType(section.steelType || 'W')
+    setEditSectionOpen(true)
+  }
+
+  function applySectionEdit(){
+    if (!editSectionForm?.id) {
+      setEditSectionOpen(false)
+      return
+    }
+    const parseNumber = (value) => {
+      const s = String(value ?? '').trim()
+      if (!s) return NaN
+      const mixed = s.match(/^(\d+)\s*-\s*(\d+)\s*\/\s*(\d+)$/)
+      if (mixed) {
+        const whole = Number(mixed[1])
+        const num = Number(mixed[2])
+        const den = Number(mixed[3])
+        if (den) return whole + num / den
+      }
+      const frac = s.match(/^(\d+)\s*\/\s*(\d+)$/)
+      if (frac) {
+        const num = Number(frac[1])
+        const den = Number(frac[2])
+        if (den) return num / den
+      }
+      const num = Number(s)
+      return Number.isFinite(num) ? num : NaN
+    }
+    const patch = {
+      name: editSectionForm.name || 'Section',
+      category: editSectionForm.category || 'beam',
+    }
+    if (editSectionForm.material === 'steel') {
+      const shape = editAiscShapes.find((s) => s.label === editSectionForm.steelShape || s.std === editSectionForm.steelShape)
+      if (!shape || !shape.dims) {
+        setEditSectionOpen(false)
+        return
+      }
+      const scale = editAiscUnits === 'metric' ? 0.001 : 0.0254
+      const bRaw = parseNumber(shape.dims.bf ?? shape.dims.b ?? shape.dims.B)
+      const hRaw = parseNumber(shape.dims.d ?? shape.dims.Ht ?? shape.dims.h)
+      patch.material = 'steel'
+      patch.aiscUnits = editAiscUnits
+      patch.steelType = editAiscType
+      patch.steelShape = shape.label || editSectionForm.steelShape
+      patch.aiscDims = shape.dims
+      patch.dims = {
+        b: Number.isFinite(bRaw) ? bRaw * scale : 0,
+        h: Number.isFinite(hRaw) ? hRaw * scale : 0,
+      }
+    } else {
+      patch.material = 'rc'
+      patch.centroid = editSectionForm.centroid || 'center'
+      patch.dims = {
+        b: Number(editSectionForm.b) || 0,
+        h: Number(editSectionForm.h) || 0,
+        l: Number(editSectionForm.l) || Number(editSectionForm.b) || 0,
+      }
+    }
+    applyModel(updateSection(model, editSectionForm.id, patch))
+    setEditSectionOpen(false)
+  }
+
   function updateMemberMeta(memberId, patch){
     const normalize = { ...patch }
     if ('sectionId' in patch && !patch.sectionId) {
@@ -622,6 +761,9 @@ export default function App(){
       type: normalize.type ?? existing.type ?? 'beam',
       align: normalize.align ?? existing.align ?? 'center',
       sectionId: normalize.sectionId ?? existing.sectionId ?? null,
+      beta: Number.isFinite(normalize.beta)
+        ? normalize.beta
+        : (Number(existing.beta) || 0),
       rotation: normalize.rotation ?? existing.rotation ?? { x: 0, y: 0, z: 0 },
       detailing: normalize.detailing ?? existing.detailing ?? null,
       preview: normalize.preview ?? existing.preview ?? 'shape',
@@ -691,6 +833,21 @@ export default function App(){
     })
   }
 
+  function updateFootingSection(footingId, sectionId){
+    const section = mergedSections.find((s) => s.id === sectionId)
+    const size = section?.dims
+      ? {
+          x: Number(section.dims.b) || 0,
+          y: Number(section.dims.h) || 0,
+          z: Number(section.dims.l || section.dims.b) || 0,
+        }
+      : null
+    updateFootingMeta(footingId, {
+      sectionId: sectionId || null,
+      ...(size ? { size } : {}),
+    })
+  }
+
   function duplicateNode(){
     if (model.selection?.type !== 'node') return
     const node = model.nodes.find((n) => n.id === model.selection.id)
@@ -722,6 +879,24 @@ export default function App(){
     if (threeRef.current && typeof threeRef.current.addNode === 'function'){
       threeRef.current.addNode(nextPos)
     }
+  }
+
+  function openBetaModal(){
+    if (model.selection?.type !== 'member') return
+    const member = model.members.find((m) => m.id === model.selection.id)
+    const beta = Number(member?.beta) || 0
+    setBetaValue(String(beta))
+    setBetaModalOpen(true)
+  }
+
+  function applyBetaAngle(){
+    if (model.selection?.type !== 'member') {
+      setBetaModalOpen(false)
+      return
+    }
+    const beta = Number(betaValue)
+    updateMemberMeta(model.selection.id, { beta: Number.isFinite(beta) ? beta : 0 })
+    setBetaModalOpen(false)
   }
 
   function duplicateMember(){
@@ -1409,39 +1584,6 @@ export default function App(){
                     >
                       Assign Footing to Selected Node
                     </button>
-                    <label style={{fontSize:12}}>
-                      B
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={footingSize.x}
-                        onChange={(e)=> setFootingSize(s => ({ ...s, x: Number(e.target.value) || 0 }))}
-                        style={{width:70, marginLeft:6}}
-                      />
-                      <span style={{marginLeft:6, color:'#64748b'}}>m</span>
-                    </label>
-                    <label style={{fontSize:12}}>
-                      D
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={footingSize.y}
-                        onChange={(e)=> setFootingSize(s => ({ ...s, y: Number(e.target.value) || 0 }))}
-                        style={{width:70, marginLeft:6}}
-                      />
-                      <span style={{marginLeft:6, color:'#64748b'}}>m</span>
-                    </label>
-                    <label style={{fontSize:12}}>
-                      L
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={footingSize.z}
-                        onChange={(e)=> setFootingSize(s => ({ ...s, z: Number(e.target.value) || 0 }))}
-                        style={{width:70, marginLeft:6}}
-                      />
-                      <span style={{marginLeft:6, color:'#64748b'}}>m</span>
-                    </label>
                   </div>
                 )}
                 {panelOpen.extrude && (
@@ -1756,6 +1898,12 @@ export default function App(){
                       <option value="line">Line</option>
                     </select>
                   </label>
+                  <div style={{fontSize:12, color:'#475569'}}>
+                    Beta: {Number(selectedMember?.beta || 0).toFixed(1)} deg
+                  </div>
+                  <button onClick={openBetaModal} style={{padding:'6px 10px'}}>
+                    Beta Angle
+                  </button>
                   {selectedMemberSection && (
                     <div style={{fontSize:12, color:'#475569'}}>
                       h: {Number.isFinite(selectedMemberSection?.dims?.h) ? selectedMemberSection.dims.h : 'n/a'}
@@ -1788,7 +1936,7 @@ export default function App(){
                   Section
                   <select
                     value={(model.footings.find(f => f.id === model.selection.id)?.sectionId) || ''}
-                    onChange={(e)=> updateFootingMeta(model.selection.id, { sectionId: e.target.value || null })}
+                    onChange={(e)=> updateFootingSection(model.selection.id, e.target.value)}
                     style={{marginLeft:6}}
                   >
                     <option value="">None</option>
@@ -1960,26 +2108,38 @@ export default function App(){
                     </>
                   ) : (
                     <>
-                      <label style={{fontSize:12}}>
-                        b
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={sectionForm.b}
-                          onChange={(e)=> setSectionForm(s => ({ ...s, b: Number(e.target.value) || 0 }))}
-                          style={{width:70, marginLeft:6}}
-                        />
-                      </label>
-                      <label style={{fontSize:12}}>
-                        h
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={sectionForm.h}
-                          onChange={(e)=> setSectionForm(s => ({ ...s, h: Number(e.target.value) || 0 }))}
-                          style={{width:70, marginLeft:6}}
-                        />
-                      </label>
+                  <label style={{fontSize:12}}>
+                    b
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={sectionForm.b}
+                      onChange={(e)=> setSectionForm(s => ({ ...s, b: Number(e.target.value) || 0 }))}
+                      style={{width:70, marginLeft:6}}
+                    />
+                  </label>
+                  <label style={{fontSize:12}}>
+                    h
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={sectionForm.h}
+                      onChange={(e)=> setSectionForm(s => ({ ...s, h: Number(e.target.value) || 0 }))}
+                      style={{width:70, marginLeft:6}}
+                    />
+                  </label>
+                  {sectionForm.category === 'footing' && (
+                    <label style={{fontSize:12}}>
+                      l
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={sectionForm.l}
+                        onChange={(e)=> setSectionForm(s => ({ ...s, l: Number(e.target.value) || 0 }))}
+                        style={{width:70, marginLeft:6}}
+                      />
+                    </label>
+                  )}
                       {sectionForm.category === 'footing' && (
                         <label style={{fontSize:12}}>
                           l
@@ -2045,15 +2205,16 @@ export default function App(){
                           {s.material === 'steel' && s.steelType && s.steelShape ? ` (${s.steelType} ${s.steelShape})` : ''}
                           {s.material !== 'steel' && s.dims ? ` (b${s.dims.b || 0} h${s.dims.h || 0}${s.dims.l ? ` l${s.dims.l}` : ''})` : ''}
                         </div>
-                        {s.source === 'custom' ? (
-                          <div style={{fontSize:12, color:'#64748b'}}>Custom</div>
-                        ) : (
-                          <button onClick={()=> handleRemoveSection(s.id)}>Remove</button>
-                        )}
-                      </div>
-                    ))}
+                    <button onClick={()=> openEditSection(s)}>Edit</button>
+                    {s.source === 'custom' ? (
+                      <div style={{fontSize:12, color:'#64748b'}}>Custom</div>
+                    ) : (
+                      <button onClick={()=> handleRemoveSection(s.id)}>Remove</button>
+                    )}
                   </div>
-                )}
+                ))}
+              </div>
+            )}
               </div>
             )}
           </div>
@@ -2088,6 +2249,163 @@ export default function App(){
       </div>
       {pendingDelete && (
         <ConfirmModal open={!!pendingDelete} title={`Delete ${pendingDelete.label}`} message={`Are you sure you want to delete ${pendingDelete.label}?`} onConfirm={confirmDelete} onCancel={()=>setPendingDelete(null)} />
+      )}
+      {betaModalOpen && (
+        <div style={{position:'fixed', inset:0, background:'rgba(15,23,42,0.45)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000}}>
+          <div style={{background:'#fff', padding:16, borderRadius:8, width:320, boxShadow:'0 10px 30px rgba(0,0,0,0.2)'}}>
+            <div style={{fontWeight:600, marginBottom:8}}>Set Beta Angle</div>
+            <label style={{fontSize:12, display:'block'}}>
+              Beta (deg)
+              <input
+                type="number"
+                step="0.1"
+                value={betaValue}
+                onChange={(e)=> setBetaValue(e.target.value)}
+                style={{width:'100%', marginTop:6}}
+              />
+            </label>
+            <div style={{display:'flex', justifyContent:'flex-end', gap:8, marginTop:12}}>
+              <button onClick={()=> setBetaModalOpen(false)}>Cancel</button>
+              <button onClick={applyBetaAngle}>Apply</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {editSectionOpen && editSectionForm && (
+        <div style={{position:'fixed', inset:0, background:'rgba(15,23,42,0.45)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000}}>
+          <div style={{background:'#fff', padding:16, borderRadius:8, width:360, boxShadow:'0 10px 30px rgba(0,0,0,0.2)'}}>
+            <div style={{fontWeight:600, marginBottom:8}}>Edit Section</div>
+            <label style={{fontSize:12, display:'block', marginBottom:8}}>
+              Name
+              <input
+                type="text"
+                value={editSectionForm.name}
+                onChange={(e)=> setEditSectionForm(s => ({ ...s, name: e.target.value }))}
+                style={{width:'100%', marginTop:6}}
+              />
+            </label>
+            <label style={{fontSize:12, display:'block', marginBottom:8}}>
+              Category
+              <select
+                value={editSectionForm.category}
+                onChange={(e)=> setEditSectionForm(s => ({ ...s, category: e.target.value }))}
+                style={{width:'100%', marginTop:6}}
+              >
+                <option value="beam">Beam</option>
+                <option value="column">Column</option>
+                {editSectionForm.material !== 'steel' && <option value="pedestal">Pedestal</option>}
+                {editSectionForm.material !== 'steel' && <option value="footing">Footing</option>}
+              </select>
+            </label>
+            <div style={{fontSize:12, marginBottom:8}}>
+              Material: {editSectionForm.material === 'steel' ? 'Steel' : 'RC'}
+            </div>
+            {editSectionForm.material === 'steel' ? (
+              <>
+                <label style={{fontSize:12, display:'block', marginBottom:8}}>
+                  Units
+                  <select
+                    value={editAiscUnits}
+                    onChange={(e)=> {
+                      setEditAiscUnits(e.target.value)
+                      setEditSectionForm(s => ({ ...s, steelShape: '' }))
+                    }}
+                    style={{width:'100%', marginTop:6}}
+                  >
+                    <option value="metric">Metric</option>
+                    <option value="imperial">Imperial</option>
+                  </select>
+                </label>
+                <label style={{fontSize:12, display:'block', marginBottom:8}}>
+                  Steel Type
+                  <select
+                    value={editAiscType}
+                    onChange={(e)=> {
+                      setEditAiscType(e.target.value)
+                      setEditSectionForm(s => ({ ...s, steelType: e.target.value, steelShape: '' }))
+                    }}
+                    style={{width:'100%', marginTop:6}}
+                  >
+                    <option value="W">W</option>
+                    <option value="C">C</option>
+                    <option value="L">L</option>
+                    <option value="HSS">HSS</option>
+                    <option value="WT">WT</option>
+                    <option value="PIPE">PIPE</option>
+                    <option value="2L">2L</option>
+                  </select>
+                </label>
+                <label style={{fontSize:12, display:'block', marginBottom:8}}>
+                  Steel Section
+                  <select
+                    value={editSectionForm.steelShape}
+                    onChange={(e)=> setEditSectionForm(s => ({ ...s, steelShape: e.target.value }))}
+                    style={{width:'100%', marginTop:6}}
+                  >
+                    <option value="">Select</option>
+                    {editAiscShapes.map((s) => (
+                      <option key={s.label || s.std} value={s.label || s.std}>
+                        {s.label || s.std}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {editAiscLoading && <div style={{fontSize:12, color:'#64748b'}}>Loading AISC...</div>}
+                {editAiscError && <div style={{fontSize:12, color:'#b45309'}}>{editAiscError}</div>}
+              </>
+            ) : (
+              <>
+                <label style={{fontSize:12, display:'block', marginBottom:8}}>
+                  Centroid
+                  <select
+                    value={editSectionForm.centroid}
+                    onChange={(e)=> setEditSectionForm(s => ({ ...s, centroid: e.target.value }))}
+                    style={{width:'100%', marginTop:6}}
+                  >
+                    <option value="center">Center</option>
+                    <option value="top">Top</option>
+                  </select>
+                </label>
+                <label style={{fontSize:12, display:'block', marginBottom:8}}>
+                  b
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={editSectionForm.b}
+                    onChange={(e)=> setEditSectionForm(s => ({ ...s, b: e.target.value }))}
+                    style={{width:'100%', marginTop:6}}
+                  />
+                </label>
+                <label style={{fontSize:12, display:'block', marginBottom:8}}>
+                  h
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={editSectionForm.h}
+                    onChange={(e)=> setEditSectionForm(s => ({ ...s, h: e.target.value }))}
+                    style={{width:'100%', marginTop:6}}
+                  />
+                </label>
+                {editSectionForm.category === 'footing' && (
+                  <label style={{fontSize:12, display:'block', marginBottom:8}}>
+                    l
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={editSectionForm.l}
+                      onChange={(e)=> setEditSectionForm(s => ({ ...s, l: e.target.value }))}
+                      style={{width:'100%', marginTop:6}}
+                    />
+                  </label>
+                )}
+              </>
+            )}
+            <div style={{display:'flex', justifyContent:'flex-end', gap:8, marginTop:12}}>
+              <button onClick={()=> setEditSectionOpen(false)}>Cancel</button>
+              <button onClick={applySectionEdit}>Save</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {undoStack && undoStack.length > 0 && (
