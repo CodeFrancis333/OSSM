@@ -17,6 +17,16 @@ function snapToGrid(v, grid = 1) {
   )
 }
 
+function applyPrecision(v, decimals) {
+  const places = Math.max(0, Math.min(4, Number(decimals) || 0))
+  const factor = Math.pow(10, places)
+  return new THREE.Vector3(
+    Math.round(v.x * factor) / factor,
+    Math.round(v.y * factor) / factor,
+    Math.round(v.z * factor) / factor
+  )
+}
+
 const ThreeScene = forwardRef((props, ref) => {
   const mountRef = useRef(null)
 
@@ -51,6 +61,7 @@ const ThreeScene = forwardRef((props, ref) => {
 
   function setMemberVisual(m, mode) {
     if (!m || !m.line) return
+    const viewMode = props.viewMode || 'geometry'
     if (mode === 'primary') {
       m.line.material && m.line.material.color.setHex(primaryLineColor)
       m.line.visible = true
@@ -61,7 +72,9 @@ const ThreeScene = forwardRef((props, ref) => {
       m.mesh?.material?.emissive?.setHex?.(0xffa500)
     } else {
       m.line.material && m.line.material.color.setHex(baseLineColor)
-      if (typeof m.preview === 'string') {
+      if (viewMode === 'lines') {
+        m.line.visible = true
+      } else if (typeof m.preview === 'string') {
         m.line.visible = m.preview === 'line' || !m.sectionDims
       }
       m.mesh?.material?.emissive?.setHex?.(0x000000)
@@ -96,6 +109,7 @@ const ThreeScene = forwardRef((props, ref) => {
   const rulerTopRef = useRef(null)
   const rulerLeftRef = useRef(null)
   const guideLinesRef = useRef(null)
+  const snapCursorRef = useRef(null)
 
   // expose API to parent
   useImperativeHandle(ref, () => ({
@@ -184,10 +198,24 @@ const ThreeScene = forwardRef((props, ref) => {
       const idx = nodesRef.current.findIndex((n) => n.userData.id === id)
       if (idx === -1) return false
       const node = nodesRef.current[idx]
-      // remove attached members
       const attached = membersRef.current.filter((m) => m.aNode === node || m.bNode === node)
+      if (attached.length === 2) {
+        const m1 = attached[0]
+        const m2 = attached[1]
+        const otherA = m1.aNode === node ? m1.bNode : m1.aNode
+        const otherB = m2.aNode === node ? m2.bNode : m2.aNode
+        const v1 = otherA.position.clone().sub(node.position).normalize()
+        const v2 = otherB.position.clone().sub(node.position).normalize()
+        if (Math.abs(v1.dot(v2)) > 0.99) {
+          const merged = addMember(otherA, otherB, null, 0, true)
+          if (merged) {
+            emitSceneChange()
+          }
+        }
+      }
       attached.forEach((m) => {
         m.line.parent && m.line.parent.remove(m.line)
+        if (m.mesh) m.mesh.parent && m.mesh.parent.remove(m.mesh)
       })
       membersRef.current = membersRef.current.filter((m) => m.aNode !== node && m.bNode !== node)
       // remove attached footings
@@ -305,6 +333,7 @@ const ThreeScene = forwardRef((props, ref) => {
 
   const loadModelRef = useRef(null)
   const updateMemberOffsetsRef = useRef(null)
+  const updateMemberMeshesRef = useRef(null)
 
   // helper to emit full scene snapshot
   function emitSceneChange() {
@@ -476,6 +505,14 @@ const ThreeScene = forwardRef((props, ref) => {
     )
     plane.rotateX(-Math.PI / 2)
     scene.add(plane)
+
+    const snapCursor = new THREE.Mesh(
+      new THREE.SphereGeometry(0.08, 10, 10),
+      new THREE.MeshStandardMaterial({ color: 0x2563eb })
+    )
+    snapCursor.visible = false
+    scene.add(snapCursor)
+    snapCursorRef.current = snapCursor
 
     // omit demo geometry for a clean scene
 
@@ -670,16 +707,24 @@ const ThreeScene = forwardRef((props, ref) => {
             ]
       const hits = raycaster.intersectObjects(objects, false)
       if (!hits || !hits.length) return null
-      const obj = hits[0].object
-      // check if it's a node
-      const node = nodesRef.current.find(n=>n === obj)
-      if (node) return { type: 'node', object: node }
-      const member = membersRef.current.find(m=>m.line === obj)
-      if (member) return { type: 'member', object: member }
-      const memberMesh = membersRef.current.find((m) => m.mesh === obj)
-      if (memberMesh) return { type: 'member', object: memberMesh }
-      const footing = footingsRef.current.find(f=>f.mesh === obj)
-      if (footing) return { type: 'footing', object: footing }
+      const hitObjects = hits.map((h) => h.object)
+      const nodeObj = hitObjects.find((obj) => nodesRef.current.includes(obj))
+      if (nodeObj) return { type: 'node', object: nodeObj }
+      const memberLine = hitObjects.find((obj) => membersRef.current.some((m) => m.line === obj))
+      if (memberLine) {
+        const member = membersRef.current.find((m) => m.line === memberLine)
+        return member ? { type: 'member', object: member } : null
+      }
+      const memberMesh = hitObjects.find((obj) => membersRef.current.some((m) => m.mesh === obj))
+      if (memberMesh) {
+        const member = membersRef.current.find((m) => m.mesh === memberMesh)
+        return member ? { type: 'member', object: member } : null
+      }
+      const footingMesh = hitObjects.find((obj) => footingsRef.current.some((f) => f.mesh === obj))
+      if (footingMesh) {
+        const footing = footingsRef.current.find((f) => f.mesh === footingMesh)
+        return footing ? { type: 'footing', object: footing } : null
+      }
       return null
     }
 
@@ -690,10 +735,13 @@ const ThreeScene = forwardRef((props, ref) => {
     }
 
     function onDoubleClick(ev) {
+      if (!props.addNodeEnabled) return
       const point = intersectGround(ev)
       if (!point) return
 
       const pos = snapEnabled ? snapToGrid(point, gridSize) : point
+      const precise = applyPrecision(pos, props.addNodePrecision)
+      pos.copy(precise)
       pos.y = resolveLevelY(pos.y)
       const basePos = selectedRef.current ? selectedRef.current.position : null
       if (tool === 'extrude' && basePos) {
@@ -872,15 +920,30 @@ const ThreeScene = forwardRef((props, ref) => {
 
     function onPointerMove(ev) {
       const point = intersectGround(ev)
-      if (!point) return
-
-      setMouseWorld({
-        x: Number(point.x).toFixed(3),
-        y: Number(point.y).toFixed(3),
-        z: Number(point.z).toFixed(3),
-      })
+      if (!point) {
+        if (snapCursorRef.current) snapCursorRef.current.visible = false
+        return
+      }
 
       const snapped = snapEnabled ? snapToGrid(point, gridSize) : point
+      const precise = applyPrecision(snapped, props.addNodePrecision)
+      const displayPoint = props.addNodeEnabled ? precise : point
+      if (props.addNodeEnabled && props.snapToLevel) {
+        displayPoint.y = resolveLevelY(displayPoint.y)
+      }
+      setMouseWorld({
+        x: Number(displayPoint.x).toFixed(3),
+        y: Number(displayPoint.y).toFixed(3),
+        z: Number(displayPoint.z).toFixed(3),
+      })
+      if (snapCursorRef.current) {
+        if (props.addNodeEnabled) {
+          snapCursorRef.current.position.copy(precise)
+          snapCursorRef.current.visible = true
+        } else {
+          snapCursorRef.current.visible = false
+        }
+      }
 
       // show crosshair while dragging
       if (guideLinesRef.current) {
@@ -939,6 +1002,10 @@ const ThreeScene = forwardRef((props, ref) => {
     }
 
     function onKeyDown(ev){
+      const tag = document.activeElement?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) {
+        return
+      }
       if (ev.key === 'Alt') {
         setRotateMode(true)
         return
@@ -968,7 +1035,8 @@ const ThreeScene = forwardRef((props, ref) => {
         return
       }
       if (ev.key === 'Backspace') return
-      if (ev.key === 'Delete'){
+      if (ev.key === 'Delete' || ev.key === 'Del' || ev.code === 'Delete'){
+        ev.preventDefault()
         if (selectedRef.current){
           const id = selectedRef.current.userData.id
           if (props.onRequestDelete){
@@ -1048,6 +1116,13 @@ const ThreeScene = forwardRef((props, ref) => {
       const h = Number(section.dims.h)
       if (!Number.isFinite(b) || !Number.isFinite(h) || b <= 0 || h <= 0) return null
       return { b, h }
+    }
+
+    function getMemberCircleDims(section) {
+      if (!section || !section.dims) return null
+      const r = Number(section.dims.r || section.dims.b / 2)
+      if (!Number.isFinite(r) || r <= 0) return null
+      return { r }
     }
 
     function getWSectionDims(section) {
@@ -1347,9 +1422,9 @@ const ThreeScene = forwardRef((props, ref) => {
       }
     }
 
-    function updateMemberMeshes(model, sectionsById) {
+    function updateMemberMeshes(model, sectionsById, viewModeOverride) {
       if (!model) return
-      const viewMode = props.viewMode || 'geometry'
+      const viewMode = viewModeOverride || props.viewMode || 'geometry'
       const forceEdges = viewMode === 'edges'
       const forceRebars = viewMode === 'rebars'
       const membersById = Object.fromEntries((model.members || []).map((m) => [m.id, m]))
@@ -1357,10 +1432,14 @@ const ThreeScene = forwardRef((props, ref) => {
         const meta = membersById[m.id]
         const section = meta?.sectionId ? sectionsById[meta.sectionId] : null
         const dims = getMemberSectionDims(section)
+        const circleDims = section?.material !== 'steel' && section?.shape === 'circle'
+          ? getMemberCircleDims(section)
+          : null
         const preview = meta?.preview || 'shape'
         const beta = Number(meta?.beta) || 0
         const hasSection = !!section
-        const forceLines = viewMode === 'lines' && !hasSection
+        const forceLines = viewMode === 'lines'
+        const showLine = forceLines || !hasSection || preview === 'line'
         if (forceRebars) {
           if (m.mesh) m.mesh.visible = false
           m.line.visible = false
@@ -1369,11 +1448,12 @@ const ThreeScene = forwardRef((props, ref) => {
         }
         if (!dims || preview === 'line' || forceLines) {
           if (m.mesh) m.mesh.visible = false
-          m.line.visible = true
+          m.line.visible = showLine
           m.sectionDims = null
           m.preview = preview
           return
         }
+        m.line.visible = showLine
         let wDims = null
         let cDims = null
         let lDims = null
@@ -1405,7 +1485,9 @@ const ThreeScene = forwardRef((props, ref) => {
                     ? `${materialKey}:pipe:${pipeDims.od.toFixed(6)}:${pipeDims.id.toFixed(6)}`
                     : twoLDims
                       ? `${materialKey}:2l:${twoLDims.d.toFixed(6)}:${twoLDims.b.toFixed(6)}:${twoLDims.t.toFixed(6)}`
-                      : `${materialKey}:box:${dims.b.toFixed(6)}:${dims.h.toFixed(6)}`
+                      : circleDims
+                        ? `${materialKey}:circle:${circleDims.r.toFixed(6)}`
+                        : `${materialKey}:box:${dims.b.toFixed(6)}:${dims.h.toFixed(6)}`
         if (!m.mesh) {
           const mat = new THREE.MeshStandardMaterial({
             color: section.material === 'steel' ? 0x5b6777 : 0x8b9bb0,
@@ -1419,6 +1501,10 @@ const ThreeScene = forwardRef((props, ref) => {
           else if (wtDims) geom = buildTSectionGeometry(wtDims)
           else if (pipeDims) geom = buildPipeSectionGeometry(pipeDims)
           else if (twoLDims) geom = build2LSectionGeometry(twoLDims)
+          else if (circleDims) {
+            geom = new THREE.CylinderGeometry(circleDims.r, circleDims.r, 1, 20)
+            geom.rotateZ(Math.PI / 2)
+          }
           else geom = new THREE.BoxGeometry(1, dims.h, dims.b)
           m.mesh = new THREE.Mesh(geom, mat)
           m.mesh.userData = { baseLen: 1, profileKey }
@@ -1433,6 +1519,10 @@ const ThreeScene = forwardRef((props, ref) => {
           else if (wtDims) geom = buildTSectionGeometry(wtDims)
           else if (pipeDims) geom = buildPipeSectionGeometry(pipeDims)
           else if (twoLDims) geom = build2LSectionGeometry(twoLDims)
+          else if (circleDims) {
+            geom = new THREE.CylinderGeometry(circleDims.r, circleDims.r, 1, 20)
+            geom.rotateZ(Math.PI / 2)
+          }
           else geom = new THREE.BoxGeometry(1, dims.h, dims.b)
           m.mesh.geometry = geom
           m.mesh.userData = { baseLen: 1, profileKey }
@@ -1444,8 +1534,7 @@ const ThreeScene = forwardRef((props, ref) => {
         if (m.mesh?.material) {
           m.mesh.material.wireframe = forceEdges
         }
-        m.mesh.visible = true
-        m.line.visible = false
+        m.mesh.visible = !forceLines
         m.sectionDims = dims
         m.beta = beta
         m.preview = preview
@@ -1479,7 +1568,7 @@ const ThreeScene = forwardRef((props, ref) => {
         if (node) addFooting(node, f.size, f.id, f.offset, f.rotation, true)
       })
       emitSceneChange()
-      updateMemberMeshes(model, sectionsById)
+      updateMemberMeshes(model, sectionsById, props.viewMode)
       if (model.selection && model.selection.id) {
         if (model.selection.type === 'node') {
           const selectedNode = nodesById[model.selection.id]
@@ -1559,11 +1648,12 @@ const ThreeScene = forwardRef((props, ref) => {
           )
         }
       })
-      updateMemberMeshes(model, sectionsById)
+      updateMemberMeshes(model, sectionsById, props.viewMode)
     }
 
     loadModelRef.current = loadModel
     updateMemberOffsetsRef.current = updateMemberOffsets
+    updateMemberMeshesRef.current = updateMemberMeshes
     if (props.model) {
       loadModel(props.model)
     } else if (props.initialModel) {
@@ -1636,7 +1726,7 @@ const ThreeScene = forwardRef((props, ref) => {
 
       if (el.contains(renderer.domElement)) el.removeChild(renderer.domElement)
     }
-  }, [snapEnabled, gridSize, gridDivisions, tool, props.floors, props.nglElevation, props.showGrid, props.showVerticalGrid, props.snapToLevel, props.activeLevelId, props.axisLock, props.constrainMembers, props.multiSelectMode, props.lineDrawMode])
+  }, [snapEnabled, gridSize, gridDivisions, tool, props.floors, props.nglElevation, props.showGrid, props.showVerticalGrid, props.snapToLevel, props.activeLevelId, props.axisLock, props.constrainMembers, props.multiSelectMode, props.lineDrawMode, props.addNodeEnabled, props.addNodePrecision])
 
   useEffect(() => {
     if (!props.lineDrawMode) {
@@ -1651,8 +1741,10 @@ const ThreeScene = forwardRef((props, ref) => {
   }, [props.model])
 
   useEffect(() => {
-    if (props.model && updateMemberOffsetsRef.current) {
-      updateMemberOffsetsRef.current(props.model)
+    if (props.model && updateMemberMeshesRef.current) {
+      const sections = (props.sections || props.model.sections) || []
+      const sectionsById = Object.fromEntries(sections.map((s) => [s.id, s]))
+      updateMemberMeshesRef.current(props.model, sectionsById, props.viewMode)
     }
   }, [props.viewMode])
 

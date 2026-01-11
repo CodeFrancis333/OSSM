@@ -42,6 +42,7 @@ export default function App(){
     b: 0.3,
     h: 0.5,
     l: 0.3,
+    r: 0.15,
     steelType: 'W',
     steelShape: '',
   })
@@ -54,6 +55,8 @@ export default function App(){
   const [viewMode, setViewMode] = useState('geometry')
   const [rotateEnabled, setRotateEnabled] = useState(false)
   const [nodeInput, setNodeInput] = useState({ x: 0, y: 0, z: 0 })
+  const [doubleClickAddEnabled, setDoubleClickAddEnabled] = useState(false)
+  const [doubleClickPrecision, setDoubleClickPrecision] = useState(0)
   const [lineDrawMode, setLineDrawMode] = useState(false)
   const [multiSelectMode, setMultiSelectMode] = useState('none') // 'none' | 'nodes' | 'members'
   const [lineStartId, setLineStartId] = useState(null)
@@ -63,6 +66,7 @@ export default function App(){
   const [multiNodeIds, setMultiNodeIds] = useState([])
   const [betaModalOpen, setBetaModalOpen] = useState(false)
   const [betaValue, setBetaValue] = useState('0')
+  const [splitCount, setSplitCount] = useState(2)
   const [editSectionOpen, setEditSectionOpen] = useState(false)
   const [editSectionForm, setEditSectionForm] = useState(null)
   const [editAiscUnits, setEditAiscUnits] = useState('metric')
@@ -283,6 +287,13 @@ export default function App(){
   }, [sectionForm.material, sectionForm.category])
 
   useEffect(() => {
+    if (sectionForm.material !== 'rc') return
+    if (sectionForm.category !== 'column' && sectionForm.shape === 'circle') {
+      setSectionForm((s) => ({ ...s, shape: 'rect' }))
+    }
+  }, [sectionForm.material, sectionForm.category, sectionForm.shape])
+
+  useEffect(() => {
     if (!editSectionOpen || editSectionForm?.material !== 'steel') return
     let cancelled = false
     setEditAiscLoading(true)
@@ -341,15 +352,22 @@ export default function App(){
     applyModel(createEmptyModel())
   }
 
-  function handleExport(){
+  function handleExport(filename){
     const json = JSON.stringify(model, null, 2)
     const blob = new Blob([json], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = 'ossm-model.json'
+    a.download = filename || 'ossm-model.json'
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  function handleSaveAs(){
+    const name = prompt('Save project as (filename):', 'ossm-model.json')
+    if (!name) return
+    const safe = name.toLowerCase().endsWith('.json') ? name : `${name}.json`
+    handleExport(safe)
   }
 
   function handleImportFile(file){
@@ -368,6 +386,10 @@ export default function App(){
 
   function handleImportClick(){
     importRef.current && importRef.current.click()
+  }
+
+  function handleOpenProject(){
+    handleImportClick()
   }
 
   function addFootingToSelected(){
@@ -604,12 +626,16 @@ export default function App(){
       return
     }
     const lVal = Number(sectionForm.l) || Number(sectionForm.b) || 0
-    const dims = { b: Number(sectionForm.b) || 0, h: Number(sectionForm.h) || 0, l: lVal }
+    const rVal = Number(sectionForm.r) || 0
+    const useCircle = sectionForm.category === 'column' && sectionForm.shape === 'circle'
+    const dims = useCircle
+      ? { r: rVal, b: rVal * 2, h: rVal * 2 }
+      : { b: Number(sectionForm.b) || 0, h: Number(sectionForm.h) || 0, l: lVal }
     applyModel(addSection(model, {
       name,
       category: sectionForm.category,
       material: 'rc',
-      shape: sectionForm.shape,
+      shape: useCircle ? 'circle' : sectionForm.shape,
       centroid: sectionForm.centroid,
       dims,
     }))
@@ -658,6 +684,7 @@ export default function App(){
       b: item.dims?.b || 0.3,
       h: item.dims?.h || 0.5,
       l: item.dims?.l || item.dims?.b || 0.3,
+      r: item.dims?.r || 0.15,
       steelType: 'W',
       steelShape: '',
     })
@@ -676,9 +703,11 @@ export default function App(){
       category: section.category || 'beam',
       material: section.material || 'rc',
       centroid: section.centroid || 'center',
+      shape: section.shape || 'rect',
       b: section.dims?.b ?? 0.3,
       h: section.dims?.h ?? 0.5,
       l: section.dims?.l ?? section.dims?.b ?? 0.3,
+      r: section.dims?.r ?? 0.15,
       steelType: section.steelType || 'W',
       steelShape: section.steelShape || '',
       aiscUnits: section.aiscUnits || 'metric',
@@ -737,10 +766,16 @@ export default function App(){
     } else {
       patch.material = 'rc'
       patch.centroid = editSectionForm.centroid || 'center'
-      patch.dims = {
-        b: Number(editSectionForm.b) || 0,
-        h: Number(editSectionForm.h) || 0,
-        l: Number(editSectionForm.l) || Number(editSectionForm.b) || 0,
+      patch.shape = editSectionForm.shape || 'rect'
+      if (editSectionForm.category === 'column' && editSectionForm.shape === 'circle') {
+        const rVal = Number(editSectionForm.r) || 0
+        patch.dims = { r: rVal, b: rVal * 2, h: rVal * 2 }
+      } else {
+        patch.dims = {
+          b: Number(editSectionForm.b) || 0,
+          h: Number(editSectionForm.h) || 0,
+          l: Number(editSectionForm.l) || Number(editSectionForm.b) || 0,
+        }
       }
     }
     applyModel(updateSection(model, editSectionForm.id, patch))
@@ -949,14 +984,7 @@ export default function App(){
     const a = model.nodes.find((n) => n.id === member.a)
     const b = model.nodes.find((n) => n.id === member.b)
     if (!a || !b) return
-    const mid = {
-      x: (a.position.x + b.position.x) / 2,
-      y: (a.position.y + b.position.y) / 2,
-      z: (a.position.z + b.position.z) / 2,
-    }
     if (!threeRef.current) return
-    const midId = threeRef.current.addNode(new THREE.Vector3(mid.x, mid.y, mid.z))
-    if (!midId) return
     const meta = {
       type: member.type || 'beam',
       sectionId: member.sectionId || null,
@@ -965,8 +993,25 @@ export default function App(){
       preview: member.preview || 'shape',
       detailing: member.detailing || null,
     }
-    createMemberWithMeta(member.a, midId, meta)
-    createMemberWithMeta(midId, member.b, meta)
+    const divisions = Math.max(2, Math.floor(Number(splitCount) || 2))
+    const points = []
+    for (let i = 1; i < divisions; i++) {
+      const t = i / divisions
+      points.push({
+        x: a.position.x + (b.position.x - a.position.x) * t,
+        y: a.position.y + (b.position.y - a.position.y) * t,
+        z: a.position.z + (b.position.z - a.position.z) * t,
+      })
+    }
+    const nodeIds = []
+    for (const p of points) {
+      const id = threeRef.current.addNode(new THREE.Vector3(p.x, p.y, p.z))
+      if (id) nodeIds.push(id)
+    }
+    const chain = [member.a, ...nodeIds, member.b]
+    for (let i = 0; i < chain.length - 1; i++) {
+      createMemberWithMeta(chain[i], chain[i + 1], meta)
+    }
     if (typeof threeRef.current.deleteMember === 'function') {
       threeRef.current.deleteMember(member.id)
     }
@@ -1211,13 +1256,58 @@ export default function App(){
     if (type === 'node'){
       const node = model.nodes.find(n=>n.id===id)
       const attached = model.members.filter(m=>m.a===id || m.b===id)
-      // delete
-      if (threeRef.current && typeof threeRef.current.deleteNode === 'function'){
-        threeRef.current.deleteNode(id)
+      if (node) {
+        let mergedMember = null
+        if (attached.length === 2) {
+          const [m1, m2] = attached
+          const otherA = m1.a === id ? m1.b : m1.a
+          const otherB = m2.a === id ? m2.b : m2.a
+          const pNode = node.position
+          const pA = model.nodes.find((n) => n.id === otherA)?.position
+          const pB = model.nodes.find((n) => n.id === otherB)?.position
+          if (pNode && pA && pB) {
+            const v1 = new THREE.Vector3(pA.x - pNode.x, pA.y - pNode.y, pA.z - pNode.z)
+            const v2 = new THREE.Vector3(pB.x - pNode.x, pB.y - pNode.y, pB.z - pNode.z)
+            const len1 = v1.length()
+            const len2 = v2.length()
+            const metaMatch = m1.type === m2.type &&
+              m1.sectionId === m2.sectionId &&
+              m1.align === m2.align &&
+              (Number(m1.beta) || 0) === (Number(m2.beta) || 0) &&
+              (m1.preview || 'shape') === (m2.preview || 'shape')
+            if (len1 > 1e-6 && len2 > 1e-6 && Math.abs(v1.normalize().dot(v2.normalize())) > 0.99 && metaMatch) {
+              const exists = model.members.some((m) =>
+                (m.a === otherA && m.b === otherB) || (m.a === otherB && m.b === otherA)
+              )
+              if (!exists) {
+                mergedMember = {
+                  id: THREE.MathUtils.generateUUID(),
+                  a: otherA,
+                  b: otherB,
+                  type: m1.type || 'beam',
+                  align: m1.align || 'center',
+                  sectionId: m1.sectionId || null,
+                  beta: Number(m1.beta) || 0,
+                  rotation: m1.rotation || { x: 0, y: 0, z: 0 },
+                  preview: m1.preview || 'shape',
+                  detailing: m1.detailing || null,
+                }
+              }
+            }
+          }
+        }
+        const nextMembers = model.members.filter((m) => m.a !== id && m.b !== id)
+        if (mergedMember) nextMembers.push(mergedMember)
+        const nextModel = {
+          ...model,
+          nodes: model.nodes.filter((n) => n.id !== id),
+          members: nextMembers,
+          footings: model.footings.filter((f) => f.nodeId !== id),
+        }
+        applyModel(nextModel)
+        const undo = { type:'node', node, attached }
+        scheduleUndo(undo)
       }
-      // push undo
-      const undo = { type:'node', node, attached }
-      scheduleUndo(undo)
     } else if (type === 'member'){
       const member = model.members.find(m=>m.id===id)
       if (threeRef.current && typeof threeRef.current.deleteMember === 'function'){
@@ -1336,7 +1426,9 @@ export default function App(){
           </div>
         </div>
         <div style={{display:'flex', gap:8}}>
-          <button onClick={handleExport} style={{padding:'6px 10px'}}>Export JSON</button>
+          <button onClick={handleSaveAs} style={{padding:'6px 10px'}}>Save Project As</button>
+          <button onClick={handleOpenProject} style={{padding:'6px 10px'}}>Open Project</button>
+          <button onClick={() => handleExport('ossm-model.json')} style={{padding:'6px 10px'}}>Export JSON</button>
           <button onClick={handleImportClick} style={{padding:'6px 10px'}}>Import JSON</button>
           <button onClick={handleReset} style={{padding:'6px 10px'}}>Reset Project</button>
           {devUserDocEnabled && (
@@ -1478,6 +1570,27 @@ export default function App(){
                   >
                     {lineDrawMode ? 'Line Draw: On' : 'Line Draw: Off'}
                   </button>
+                  <label style={{fontSize:12}}>
+                    Double-click add
+                    <input
+                      type="checkbox"
+                      checked={doubleClickAddEnabled}
+                      onChange={(e)=> setDoubleClickAddEnabled(e.target.checked)}
+                      style={{marginLeft:6}}
+                    />
+                  </label>
+                  <label style={{fontSize:12}}>
+                    Precision
+                    <input
+                      type="number"
+                      min="0"
+                      max="4"
+                      step="1"
+                      value={doubleClickPrecision}
+                      onChange={(e)=> setDoubleClickPrecision(Number(e.target.value) || 0)}
+                      style={{width:60, marginLeft:6}}
+                    />
+                  </label>
                   {lineDrawMode && (
                     <div style={{fontSize:12, color:'#475569'}}>
                       {lineStartId ? 'Start node selected. Pick end node.' : 'Pick two nodes to create a member.'}
@@ -1757,6 +1870,18 @@ export default function App(){
                 </select>
               </label>
               <button
+                onClick={() => setViewMode('geometry')}
+                style={{padding:'6px 10px'}}
+              >
+                Show all geometric
+              </button>
+              <button
+                onClick={() => setViewMode('lines')}
+                style={{padding:'6px 10px'}}
+              >
+                Unshow all geometric
+              </button>
+              <button
                 onClick={() => setRotateEnabled((v) => !v)}
                 style={{padding:'6px 10px'}}
               >
@@ -1922,6 +2047,17 @@ export default function App(){
                     </svg>
                   )}
                   <button onClick={splitSelectedMember} style={{padding:'6px 10px'}}>Split Member</button>
+                  <label style={{fontSize:12}}>
+                    Divisions
+                    <input
+                      type="number"
+                      min="2"
+                      step="1"
+                      value={splitCount}
+                      onChange={(e)=> setSplitCount(Number(e.target.value) || 2)}
+                      style={{width:60, marginLeft:6}}
+                    />
+                  </label>
                   <button onClick={splitSelectedMemberAtIntersections} style={{padding:'6px 10px'}}>Split at Intersection</button>
                   <button onClick={joinSelectedMember} style={{padding:'6px 10px'}}>Join Collinear</button>
                 </>
@@ -2108,26 +2244,54 @@ export default function App(){
                     </>
                   ) : (
                     <>
-                  <label style={{fontSize:12}}>
-                    b
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={sectionForm.b}
-                      onChange={(e)=> setSectionForm(s => ({ ...s, b: Number(e.target.value) || 0 }))}
-                      style={{width:70, marginLeft:6}}
-                    />
-                  </label>
-                  <label style={{fontSize:12}}>
-                    h
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={sectionForm.h}
-                      onChange={(e)=> setSectionForm(s => ({ ...s, h: Number(e.target.value) || 0 }))}
-                      style={{width:70, marginLeft:6}}
-                    />
-                  </label>
+                  {sectionForm.category === 'column' && (
+                    <label style={{fontSize:12}}>
+                      Shape
+                      <select
+                        value={sectionForm.shape}
+                        onChange={(e)=> setSectionForm(s => ({ ...s, shape: e.target.value }))}
+                        style={{marginLeft:6}}
+                      >
+                        <option value="rect">Tied (Rect)</option>
+                        <option value="circle">Circular</option>
+                      </select>
+                    </label>
+                  )}
+                  {sectionForm.category === 'column' && sectionForm.shape === 'circle' ? (
+                    <label style={{fontSize:12}}>
+                      r
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={sectionForm.r}
+                        onChange={(e)=> setSectionForm(s => ({ ...s, r: Number(e.target.value) || 0 }))}
+                        style={{width:70, marginLeft:6}}
+                      />
+                    </label>
+                  ) : (
+                    <>
+                      <label style={{fontSize:12}}>
+                        b
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={sectionForm.b}
+                          onChange={(e)=> setSectionForm(s => ({ ...s, b: Number(e.target.value) || 0 }))}
+                          style={{width:70, marginLeft:6}}
+                        />
+                      </label>
+                      <label style={{fontSize:12}}>
+                        h
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={sectionForm.h}
+                          onChange={(e)=> setSectionForm(s => ({ ...s, h: Number(e.target.value) || 0 }))}
+                          style={{width:70, marginLeft:6}}
+                        />
+                      </label>
+                    </>
+                  )}
                   {sectionForm.category === 'footing' && (
                     <label style={{fontSize:12}}>
                       l
@@ -2232,6 +2396,8 @@ export default function App(){
                   viewMode={viewMode}
                   multiSelectMode={multiSelectMode}
                   lineDrawMode={lineDrawMode}
+                  addNodeEnabled={doubleClickAddEnabled}
+                  addNodePrecision={doubleClickPrecision}
                   snapToLevel={!!model.snapToLevel}
                 activeLevelId={model.activeLevelId}
                 axisLock={model.axisLock}
@@ -2366,26 +2532,54 @@ export default function App(){
                     <option value="top">Top</option>
                   </select>
                 </label>
-                <label style={{fontSize:12, display:'block', marginBottom:8}}>
-                  b
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={editSectionForm.b}
-                    onChange={(e)=> setEditSectionForm(s => ({ ...s, b: e.target.value }))}
-                    style={{width:'100%', marginTop:6}}
-                  />
-                </label>
-                <label style={{fontSize:12, display:'block', marginBottom:8}}>
-                  h
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={editSectionForm.h}
-                    onChange={(e)=> setEditSectionForm(s => ({ ...s, h: e.target.value }))}
-                    style={{width:'100%', marginTop:6}}
-                  />
-                </label>
+                {editSectionForm.category === 'column' && (
+                  <label style={{fontSize:12, display:'block', marginBottom:8}}>
+                    Shape
+                    <select
+                      value={editSectionForm.shape}
+                      onChange={(e)=> setEditSectionForm(s => ({ ...s, shape: e.target.value }))}
+                      style={{width:'100%', marginTop:6}}
+                    >
+                      <option value="rect">Tied (Rect)</option>
+                      <option value="circle">Circular</option>
+                    </select>
+                  </label>
+                )}
+                {editSectionForm.category === 'column' && editSectionForm.shape === 'circle' ? (
+                  <label style={{fontSize:12, display:'block', marginBottom:8}}>
+                    r
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={editSectionForm.r}
+                      onChange={(e)=> setEditSectionForm(s => ({ ...s, r: e.target.value }))}
+                      style={{width:'100%', marginTop:6}}
+                    />
+                  </label>
+                ) : (
+                  <>
+                    <label style={{fontSize:12, display:'block', marginBottom:8}}>
+                      b
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={editSectionForm.b}
+                        onChange={(e)=> setEditSectionForm(s => ({ ...s, b: e.target.value }))}
+                        style={{width:'100%', marginTop:6}}
+                      />
+                    </label>
+                    <label style={{fontSize:12, display:'block', marginBottom:8}}>
+                      h
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={editSectionForm.h}
+                        onChange={(e)=> setEditSectionForm(s => ({ ...s, h: e.target.value }))}
+                        style={{width:'100%', marginTop:6}}
+                      />
+                    </label>
+                  </>
+                )}
                 {editSectionForm.category === 'footing' && (
                   <label style={{fontSize:12, display:'block', marginBottom:8}}>
                     l
