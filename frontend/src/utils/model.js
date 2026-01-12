@@ -43,6 +43,7 @@ export function createEmptyModel() {
     constrainMembers: false,
     showGrid: true,
     showVerticalGrid: true,
+    showAxes: true,
     selection: { type: null, id: null },
   }
 }
@@ -78,6 +79,7 @@ export function normalizeModel(raw) {
     constrainMembers: typeof raw.constrainMembers === 'boolean' ? raw.constrainMembers : false,
     showGrid: typeof raw.showGrid === 'boolean' ? raw.showGrid : true,
     showVerticalGrid: typeof raw.showVerticalGrid === 'boolean' ? raw.showVerticalGrid : true,
+    showAxes: typeof raw.showAxes === 'boolean' ? raw.showAxes : true,
     selection: normalizeSelection(raw.selection),
   }
 }

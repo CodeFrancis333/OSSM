@@ -110,6 +110,7 @@ const ThreeScene = forwardRef((props, ref) => {
   const rulerLeftRef = useRef(null)
   const guideLinesRef = useRef(null)
   const snapCursorRef = useRef(null)
+  const axesGroupRef = useRef(null)
 
   // expose API to parent
   useImperativeHandle(ref, () => ({
@@ -423,8 +424,45 @@ const ThreeScene = forwardRef((props, ref) => {
     }
     scene.add(grid)
 
+    function makeAxisLabel(text, color) {
+      const canvas = document.createElement('canvas')
+      canvas.width = 128
+      canvas.height = 64
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        ctx.font = 'bold 36px Arial'
+        ctx.fillStyle = color
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(text, canvas.width / 2, canvas.height / 2)
+      }
+      const texture = new THREE.CanvasTexture(canvas)
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+      })
+      const sprite = new THREE.Sprite(material)
+      sprite.scale.set(1.1, 0.55, 1)
+      sprite.renderOrder = 999
+      return sprite
+    }
+
+    const axesGroup = new THREE.Group()
     const axes = new THREE.AxesHelper(5)
-    scene.add(axes)
+    axesGroup.add(axes)
+    const xLabel = makeAxisLabel('X', '#dc2626')
+    xLabel.position.set(6.6, 0, 0)
+    const yLabel = makeAxisLabel('Y', '#16a34a')
+    yLabel.position.set(0, 6.6, 0)
+    const zLabel = makeAxisLabel('Z', '#2563eb')
+    zLabel.position.set(0, 0, 6.6)
+    axesGroup.add(xLabel, yLabel, zLabel)
+    axesGroup.visible = props.showAxes !== false
+    scene.add(axesGroup)
+    axesGroupRef.current = axesGroup
 
     // Floors, NGL, and vertical gridlines
     const floorGroup = new THREE.Group()
@@ -535,7 +573,10 @@ const ThreeScene = forwardRef((props, ref) => {
       s.position.copy(pos)
       scene.add(s)
       nodesRef.current.push(s)
-      if (!suppressEmit) emitSceneChange()
+      if (!suppressEmit) {
+        splitMembersAtNode(s)
+        emitSceneChange()
+      }
       return s
     }
     addNodeRef.current = addNode
@@ -671,6 +712,62 @@ const ThreeScene = forwardRef((props, ref) => {
         )
       })
       emitSceneChange()
+    }
+
+    function distanceToSegmentXZ(point, a, b) {
+      const p2 = new THREE.Vector2(point.x, point.z)
+      const a2 = new THREE.Vector2(a.x, a.z)
+      const b2 = new THREE.Vector2(b.x, b.z)
+      const ab = b2.clone().sub(a2)
+      const abLenSq = ab.lengthSq()
+      if (abLenSq <= 1e-9) {
+        return { dist: p2.distanceTo(a2), t: 0, closest: a.clone() }
+      }
+      let t = p2.clone().sub(a2).dot(ab) / abLenSq
+      t = Math.max(0, Math.min(1, t))
+      const closest = a.clone().add(b.clone().sub(a).multiplyScalar(t))
+      const closest2 = a2.add(ab.multiplyScalar(t))
+      return { dist: p2.distanceTo(closest2), t, closest }
+    }
+
+    function splitMembersAtNode(nodeMesh) {
+      const point = nodeMesh.position.clone()
+      const toSplit = []
+      const threshold = 0.2
+      let best = null
+      membersRef.current.forEach((m) => {
+        const a = m.aNode.position.clone()
+        const b = m.bNode.position.clone()
+        const off = m.offsetY || 0
+        a.y += off
+        b.y += off
+        const { dist, t, closest } = distanceToSegmentXZ(point, a, b)
+        if (dist > threshold) return
+        if (t < 0.02 || t > 0.98) return
+        toSplit.push(m)
+        if (!best || dist < best.dist) {
+          best = { dist, closest }
+        }
+      })
+      if (!toSplit.length) return
+      if (best?.closest) {
+        nodeMesh.position.x = best.closest.x
+        nodeMesh.position.z = best.closest.z
+      }
+      toSplit.forEach((m) => {
+        const aNode = m.aNode
+        const bNode = m.bNode
+        const off = m.offsetY || 0
+        const mIndex = membersRef.current.findIndex((x) => x === m)
+        if (mIndex !== -1) {
+          m.line.parent && m.line.parent.remove(m.line)
+          if (m.mesh) m.mesh.parent && m.mesh.parent.remove(m.mesh)
+          membersRef.current.splice(mIndex, 1)
+        }
+        addMember(aNode, nodeMesh, null, off, true)
+        addMember(nodeMesh, bNode, null, off, true)
+      })
+      refreshMemberVisuals()
     }
 
     // --- Interaction ---
@@ -1765,6 +1862,12 @@ const ThreeScene = forwardRef((props, ref) => {
       n.visible = showNodes
     })
   }, [props.viewMode])
+
+  useEffect(() => {
+    if (axesGroupRef.current) {
+      axesGroupRef.current.visible = props.showAxes !== false
+    }
+  }, [props.showAxes])
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>

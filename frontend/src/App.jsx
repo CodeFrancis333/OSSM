@@ -120,20 +120,59 @@ export default function App(){
     setModel(m => {
       const existingMembers = Object.fromEntries((m.members || []).map((mem) => [mem.id, mem]))
       const existingFootings = Object.fromEntries((m.footings || []).map((f) => [f.id, f]))
+      const nextNodes = payload.nodes || []
+      const nextMembersRaw = payload.members || []
+      const nextMembersById = new Set(nextMembersRaw.map((mem) => mem.id))
+      const removedMembers = (m.members || []).filter((mem) => !nextMembersById.has(mem.id))
+      const removedMeta = removedMembers.map((mem) => {
+        const a = (m.nodes || []).find((n) => n.id === mem.a)?.position
+        const b = (m.nodes || []).find((n) => n.id === mem.b)?.position
+        return { mem, a, b }
+      }).filter((item) => item.a && item.b)
+      const nextNodesById = Object.fromEntries(nextNodes.map((n) => [n.id, n]))
+
+      function pointOnSegment(p, a, b, eps){
+        const pa = new THREE.Vector3(p.x, p.y, p.z)
+        const va = new THREE.Vector3(a.x, a.y, a.z)
+        const vb = new THREE.Vector3(b.x, b.y, b.z)
+        const ab = vb.clone().sub(va)
+        const lenSq = ab.lengthSq()
+        if (lenSq <= 1e-9) return false
+        const t = pa.clone().sub(va).dot(ab) / lenSq
+        if (t < -eps || t > 1 + eps) return false
+        const closest = va.add(ab.multiplyScalar(Math.max(0, Math.min(1, t))))
+        return pa.distanceTo(closest) <= eps
+      }
+
+      function findRemovedMetaFor(newMem){
+        const pA = nextNodesById[newMem.a]?.position
+        const pB = nextNodesById[newMem.b]?.position
+        if (!pA || !pB) return null
+        const eps = 1e-3
+        for (const candidate of removedMeta){
+          if (!candidate.a || !candidate.b) continue
+          const onA = pointOnSegment(pA, candidate.a, candidate.b, eps)
+          const onB = pointOnSegment(pB, candidate.a, candidate.b, eps)
+          if (onA && onB) return candidate.mem
+        }
+        return null
+      }
       const pending = pendingMemberMetaRef.current || {}
       const metaCache = memberMetaRef.current || {}
-      const members = (payload.members || []).map((mem) => {
+      const members = nextMembersRaw.map((mem) => {
         const prev = existingMembers[mem.id]
         const pendingMeta = pending[mem.id]
         const cachedMeta = metaCache[mem.id]
         if (pendingMeta) delete pending[mem.id]
-        const type = pendingMeta?.type ?? cachedMeta?.type ?? prev?.type ?? 'beam'
-        const align = pendingMeta?.align ?? cachedMeta?.align ?? prev?.align ?? (type === 'beam' ? 'top' : 'center')
-        const sectionId = pendingMeta?.sectionId ?? cachedMeta?.sectionId ?? prev?.sectionId ?? null
-        const beta = Number(pendingMeta?.beta ?? cachedMeta?.beta ?? prev?.beta) || 0
-        const rotation = pendingMeta?.rotation ?? cachedMeta?.rotation ?? prev?.rotation ?? { x: 0, y: 0, z: 0 }
-        const preview = pendingMeta?.preview ?? cachedMeta?.preview ?? prev?.preview ?? 'shape'
-        const detailing = pendingMeta?.detailing ?? cachedMeta?.detailing ?? prev?.detailing ?? null
+        const recovered = !pendingMeta && !cachedMeta && !prev ? findRemovedMetaFor(mem) : null
+        const source = pendingMeta || cachedMeta || prev || recovered
+        const type = source?.type ?? 'beam'
+        const align = source?.align ?? (type === 'beam' ? 'top' : 'center')
+        const sectionId = source?.sectionId ?? null
+        const beta = Number(source?.beta) || 0
+        const rotation = source?.rotation ?? { x: 0, y: 0, z: 0 }
+        const preview = source?.preview ?? 'shape'
+        const detailing = source?.detailing ?? null
         const nextMember = {
           ...(prev || {}),
           ...mem,
@@ -884,36 +923,46 @@ export default function App(){
   }
 
   function duplicateNode(){
-    if (model.selection?.type !== 'node') return
-    const node = model.nodes.find((n) => n.id === model.selection.id)
-    if (!node) return
-    const pos = node.position
     const offset = {
       x: Number(dupOffset.x) || 0,
       y: Number(dupOffset.y) || 0,
       z: Number(dupOffset.z) || 0,
     }
-    const nextPos = new THREE.Vector3(
-      (pos?.x || 0) + offset.x,
-      (pos?.y || 0) + offset.y,
-      (pos?.z || 0) + offset.z
-    )
-    const eps = 1e-6
-    const existing = model.nodes.find((n) => {
-      const p = n.position || {}
-      return Math.abs((p.x || 0) - nextPos.x) < eps &&
-        Math.abs((p.y || 0) - nextPos.y) < eps &&
-        Math.abs((p.z || 0) - nextPos.z) < eps
-    })
-    if (existing) {
-      if (threeRef.current && typeof threeRef.current.selectNode === 'function') {
-        threeRef.current.selectNode(existing.id)
-      }
+    if (!offset.x && !offset.y && !offset.z) {
+      alert('Set a duplicate offset (dX/dY/dZ) first.')
       return
     }
-    if (threeRef.current && typeof threeRef.current.addNode === 'function'){
-      threeRef.current.addNode(nextPos)
-    }
+    const targetIds = multiSelectMode === 'nodes' && multiNodeIds.length
+      ? multiNodeIds
+      : model.selection?.type === 'node'
+        ? [model.selection.id]
+        : lastSelectedNodeIdRef.current
+          ? [lastSelectedNodeIdRef.current]
+          : []
+    if (!targetIds.length) return
+    const nodes = targetIds
+      .map((id) => model.nodes.find((n) => n.id === id))
+      .filter(Boolean)
+    if (!nodes.length) return
+    const eps = 1e-6
+    nodes.forEach((node) => {
+      const pos = node.position || { x: 0, y: 0, z: 0 }
+      const nextPos = new THREE.Vector3(
+        pos.x + offset.x,
+        pos.y + offset.y,
+        pos.z + offset.z
+      )
+      const existing = model.nodes.find((n) => {
+        const p = n.position || {}
+        return Math.abs((p.x || 0) - nextPos.x) < eps &&
+          Math.abs((p.y || 0) - nextPos.y) < eps &&
+          Math.abs((p.z || 0) - nextPos.z) < eps
+      })
+      if (existing) return
+      if (threeRef.current && typeof threeRef.current.addNode === 'function'){
+        threeRef.current.addNode(nextPos)
+      }
+    })
   }
 
   function openBetaModal(){
@@ -1408,6 +1457,9 @@ export default function App(){
   const sectionPreviewScale = sectionPreview
     ? Math.max(sectionPreview.b, sectionPreview.h, 1)
     : 1
+  const canDuplicateNode = (multiSelectMode === 'nodes' && multiNodeIds.length > 0) ||
+    model.selection?.type === 'node' ||
+    !!lastSelectedNodeIdRef.current
   const showTree = activeTab === 'modeling'
   const showSectionEditor = activeTab === 'detailing'
   const showScene = activeTab === 'modeling'
@@ -1506,7 +1558,7 @@ export default function App(){
                     { key: 'nodes', label: 'Nodes' },
                     { key: 'member', label: 'Add Member' },
                     { key: 'footing', label: 'Footing' },
-                    { key: 'levels', label: 'Levels & NGL' },
+                    { key: 'levels', label: 'Levels & View' },
                     { key: 'constraints', label: 'Constraints' },
                     { key: 'duplicate', label: 'Duplicate' },
                     { key: 'extrude', label: 'Extrude' },
@@ -1827,7 +1879,7 @@ export default function App(){
               <>
             {panelOpen.levels && (
             <div style={{display:'flex', alignItems:'center', gap:10, marginTop:10, flexWrap:'wrap'}}>
-              <div style={{fontWeight:600}}>Levels & NGL</div>
+              <div style={{fontWeight:600}}>Levels & View</div>
               <label style={{fontSize:12}}>
                 NGL
                 <input
@@ -1844,6 +1896,15 @@ export default function App(){
                   type="checkbox"
                   checked={!!model.showGrid}
                   onChange={(e)=> applyModel({ ...model, showGrid: e.target.checked })}
+                  style={{marginLeft:6}}
+                />
+              </label>
+              <label style={{fontSize:12}}>
+                Show Axes
+                <input
+                  type="checkbox"
+                  checked={model.showAxes !== false}
+                  onChange={(e)=> applyModel({ ...model, showAxes: e.target.checked })}
                   style={{marginLeft:6}}
                 />
               </label>
@@ -2148,7 +2209,7 @@ export default function App(){
                   style={{width:70, marginLeft:6}}
                 />
               </label>
-              <button onClick={duplicateNode} disabled={model.selection?.type !== 'node'}>Duplicate Node</button>
+              <button onClick={duplicateNode} disabled={!canDuplicateNode}>Duplicate Node</button>
               <button onClick={duplicateMember} disabled={model.selection?.type !== 'member'}>Duplicate Member</button>
             </div>
             )}
@@ -2392,6 +2453,7 @@ export default function App(){
                 floors={model.floors}
                 nglElevation={model.ngl}
                 showGrid={!!model.showGrid}
+                showAxes={model.showAxes !== false}
                 showVerticalGrid={!!model.showVerticalGrid}
                   viewMode={viewMode}
                   multiSelectMode={multiSelectMode}
