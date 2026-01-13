@@ -71,7 +71,13 @@ const ThreeScene = forwardRef((props, ref) => {
       m.line.visible = true
       m.mesh?.material?.emissive?.setHex?.(0xffa500)
     } else {
-      m.line.material && m.line.material.color.setHex(baseLineColor)
+      if (m.line.material) {
+        if (viewMode === 'lines' && m.lineBaseColor) {
+          m.line.material.color.copy(m.lineBaseColor)
+        } else {
+          m.line.material.color.setHex(baseLineColor)
+        }
+      }
       if (viewMode === 'lines') {
         m.line.visible = true
       } else if (typeof m.preview === 'string') {
@@ -320,11 +326,11 @@ const ThreeScene = forwardRef((props, ref) => {
       const m = addMemberRef.current(a, b, forcedId)
       return m?.id
     },
-    addFooting: (nodeId, size) => {
+    addFooting: (nodeId, size, sectionColor) => {
       if (!addFootingRef.current) return null
       const node = nodesRef.current.find((n) => n.userData.id === nodeId)
       if (!node) return null
-      const f = addFootingRef.current(node, size)
+      const f = addFootingRef.current(node, size, null, null, null, sectionColor)
       return f?.id
     },
     setModel: (model) => {
@@ -581,12 +587,12 @@ const ThreeScene = forwardRef((props, ref) => {
     }
     addNodeRef.current = addNode
 
-    function addFooting(nodeMesh, size, forcedId, offset, rotation, suppressEmit) {
+    function addFooting(nodeMesh, size, forcedId, offset, rotation, sectionColor, suppressEmit) {
       const footingSize = size || { x: 1, y: 0.4, z: 1 }
       const off = offset || { x: 0, y: 0, z: 0 }
       const rot = rotation || { x: 0, y: 0, z: 0 }
       const geo = new THREE.BoxGeometry(footingSize.x, footingSize.y, footingSize.z)
-      const mat = new THREE.MeshStandardMaterial({ color: 0x7f8ea3 })
+      const mat = new THREE.MeshStandardMaterial({ color: sectionColor || 0x7f8ea3 })
       const mesh = new THREE.Mesh(geo, mat)
       mesh.userData.id = forcedId || THREE.MathUtils.generateUUID()
       mesh.userData.type = 'footing'
@@ -1537,6 +1543,8 @@ const ThreeScene = forwardRef((props, ref) => {
         const hasSection = !!section
         const forceLines = viewMode === 'lines'
         const showLine = forceLines || !hasSection || preview === 'line'
+        const sectionColor = section?.color || null
+        m.lineBaseColor = sectionColor ? new THREE.Color(sectionColor) : null
         if (forceRebars) {
           if (m.mesh) m.mesh.visible = false
           m.line.visible = false
@@ -1546,6 +1554,9 @@ const ThreeScene = forwardRef((props, ref) => {
         if (!dims || preview === 'line' || forceLines) {
           if (m.mesh) m.mesh.visible = false
           m.line.visible = showLine
+          if (m.line?.material && m.lineBaseColor) {
+            m.line.material.color.copy(m.lineBaseColor)
+          }
           m.sectionDims = null
           m.preview = preview
           return
@@ -1587,7 +1598,7 @@ const ThreeScene = forwardRef((props, ref) => {
                         : `${materialKey}:box:${dims.b.toFixed(6)}:${dims.h.toFixed(6)}`
         if (!m.mesh) {
           const mat = new THREE.MeshStandardMaterial({
-            color: section.material === 'steel' ? 0x5b6777 : 0x8b9bb0,
+            color: sectionColor || (section.material === 'steel' ? 0x5b6777 : 0x8b9bb0),
             wireframe: forceEdges,
           })
           let geom = null
@@ -1624,7 +1635,7 @@ const ThreeScene = forwardRef((props, ref) => {
           m.mesh.geometry = geom
           m.mesh.userData = { baseLen: 1, profileKey }
           if (m.mesh.material) {
-            m.mesh.material.color.set(section.material === 'steel' ? 0x5b6777 : 0x8b9bb0)
+            m.mesh.material.color.set(sectionColor || (section.material === 'steel' ? 0x5b6777 : 0x8b9bb0))
             m.mesh.material.wireframe = forceEdges
           }
         }
@@ -1632,6 +1643,9 @@ const ThreeScene = forwardRef((props, ref) => {
           m.mesh.material.wireframe = forceEdges
         }
         m.mesh.visible = !forceLines
+        if (m.line?.material && showLine && m.lineBaseColor) {
+          m.line.material.color.copy(m.lineBaseColor)
+        }
         m.sectionDims = dims
         m.beta = beta
         m.preview = preview
@@ -1662,7 +1676,9 @@ const ThreeScene = forwardRef((props, ref) => {
       const footingList = Array.isArray(model.footings) ? model.footings : []
       footingList.forEach((f) => {
         const node = nodesById[f.nodeId]
-        if (node) addFooting(node, f.size, f.id, f.offset, f.rotation, true)
+        const section = f.sectionId ? sectionsById[f.sectionId] : null
+        const color = section?.color || null
+        if (node) addFooting(node, f.size, f.id, f.offset, f.rotation, color, true)
       })
       emitSceneChange()
       updateMemberMeshes(model, sectionsById, props.viewMode)
@@ -1743,6 +1759,12 @@ const ThreeScene = forwardRef((props, ref) => {
             nodeMesh.position.y - size.y / 2,
             nodeMesh.position.z + off.z
           )
+        }
+        const section = meta.sectionId ? sectionsById[meta.sectionId] : null
+        if (section?.color && f.mesh.material) {
+          f.mesh.material.color.set(section.color)
+        } else if (f.mesh.material) {
+          f.mesh.material.color.set(0x7f8ea3)
         }
       })
       updateMemberMeshes(model, sectionsById, props.viewMode)

@@ -94,7 +94,60 @@ export default function App(){
   const [isPremium, setIsPremium] = useState(false)
   const [customShapes, setCustomShapes] = useState([])
   const [customShapeId, setCustomShapeId] = useState('')
+  const [sectionPalette, setSectionPalette] = useState('All Gray')
   const devUserDocEnabled = import.meta.env.VITE_DEV_USER_DOC === '1'
+
+  const SECTION_PALETTES = {
+    'All Gray': { base: ['#64748b'], mode: 'fixed' },
+    Classic: { base: ['#2563eb', '#dc2626', '#16a34a', '#f97316', '#7c3aed', '#0f766e', '#ca8a04', '#9333ea'], mode: 'classic' },
+    Pastel: { base: ['#7dd3fc', '#fca5a5', '#86efac', '#fdba74', '#c4b5fd', '#5eead4', '#fde68a', '#d8b4fe'], mode: 'pastel' },
+    Contrast: { base: ['#0f172a', '#ef4444', '#22c55e', '#eab308', '#6366f1', '#14b8a6', '#f97316', '#ec4899'], mode: 'contrast' },
+  }
+
+  function hslToHex(h, s, l){
+    const c = (1 - Math.abs(2 * l - 1)) * s
+    const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+    const m = l - c / 2
+    let r = 0
+    let g = 0
+    let b = 0
+    if (h < 60) {
+      r = c; g = x; b = 0
+    } else if (h < 120) {
+      r = x; g = c; b = 0
+    } else if (h < 180) {
+      r = 0; g = c; b = x
+    } else if (h < 240) {
+      r = 0; g = x; b = c
+    } else if (h < 300) {
+      r = x; g = 0; b = c
+    } else {
+      r = c; g = 0; b = x
+    }
+    const toHex = (v) => Math.round((v + m) * 255).toString(16).padStart(2, '0')
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`
+  }
+
+  function generatePalette(count, mode){
+    if (mode === 'fixed') {
+      return Array.from({ length: count }, () => '#64748b')
+    }
+    const sat = mode === 'pastel' ? 0.45 : mode === 'contrast' ? 0.75 : 0.65
+    const light = mode === 'pastel' ? 0.78 : mode === 'contrast' ? 0.45 : 0.55
+    const colors = []
+    for (let i = 0; i < count; i++) {
+      const hue = (i * 360) / Math.max(1, count)
+      colors.push(hslToHex(hue, sat, light))
+    }
+    return colors
+  }
+
+  function getPaletteColors(name, count){
+    const entry = SECTION_PALETTES[name] || SECTION_PALETTES.Classic
+    const total = Math.max(count || entry.base.length, entry.base.length)
+    const generated = generatePalette(total, entry.mode)
+    return entry.base.concat(generated.slice(entry.base.length))
+  }
 
   function addBomLine(line){
     const withId = { id: Date.now() + Math.random(), ...line }
@@ -435,7 +488,9 @@ export default function App(){
     if (!model.selection || model.selection.type !== 'node') return
     const nodeId = model.selection.id
     if (!nodeId || !threeRef.current || typeof threeRef.current.addFooting !== 'function') return
-    threeRef.current.addFooting(nodeId, footingSize)
+    const section = mergedSections.find((s) => s.id === footingSectionId)
+    const color = section?.color || null
+    threeRef.current.addFooting(nodeId, footingSize, color)
   }
 
   function assignFootingSectionToSelected(){
@@ -619,8 +674,21 @@ export default function App(){
     applyModel(removeFloor(model, id))
   }
 
+  function applySectionPalette(){
+    const colors = getPaletteColors(sectionPalette, model.sections.length)
+    applyModel({
+      ...model,
+      sections: model.sections.map((s, index) => ({
+        ...s,
+        color: colors[index % colors.length],
+      })),
+    })
+  }
+
   function handleAddSection(){
     const name = sectionForm.name || `${sectionForm.category} ${model.sections.length + 1}`
+    const colors = getPaletteColors(sectionPalette, model.sections.length + 1)
+    const color = colors[model.sections.length % colors.length]
     if (sectionForm.material === 'steel') {
       const parseNumber = (value) => {
         const s = String(value ?? '').trim()
@@ -660,6 +728,7 @@ export default function App(){
         steelShape: shape.label || sectionForm.steelShape,
         aiscUnits,
         aiscDims: shape.dims,
+        color,
       }))
       setSectionForm(s => ({ ...s, name: '' }))
       return
@@ -677,6 +746,7 @@ export default function App(){
       shape: useCircle ? 'circle' : sectionForm.shape,
       centroid: sectionForm.centroid,
       dims,
+      color,
     }))
     setSectionForm(s => ({ ...s, name: '' }))
   }
@@ -920,6 +990,13 @@ export default function App(){
       sectionId: sectionId || null,
       ...(size ? { size } : {}),
     })
+    if (threeRef.current && typeof threeRef.current.setModel === 'function') {
+      const next = {
+        ...model,
+        footings: model.footings.map((f) => (f.id === footingId ? { ...f, sectionId: sectionId || null, ...(size ? { size } : {}) } : f)),
+      }
+      threeRef.current.setModel(next)
+    }
   }
 
   function duplicateNode(){
@@ -2218,6 +2295,24 @@ export default function App(){
             {showSectionsPanel && (
               <div style={{marginTop:12}}>
                 <div style={{fontWeight:600, marginBottom:8}}>Section Properties</div>
+                <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:10}}>
+                  <div style={{fontWeight:600}}>Section Colors</div>
+                  <label style={{fontSize:12}}>
+                    Palette
+                    <select
+                      value={sectionPalette}
+                      onChange={(e)=> setSectionPalette(e.target.value)}
+                      style={{marginLeft:6}}
+                    >
+                      {Object.keys(SECTION_PALETTES).map((name) => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button onClick={applySectionPalette} style={{padding:'6px 10px'}}>
+                    Apply Palette
+                  </button>
+                </div>
                 <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
                   <label style={{fontSize:12}}>
                     Category
@@ -2423,6 +2518,7 @@ export default function App(){
                   <div style={{marginTop:8}}>
                     {mergedSections.map((s) => (
                       <div key={s.id} style={{display:'flex', alignItems:'center', gap:8, marginBottom:4}}>
+                        <div style={{width:12, height:12, borderRadius:3, background: s.color || '#94a3b8', border:'1px solid #e2e8f0'}} />
                         <div style={{minWidth:110, fontSize:12}}>{s.category}</div>
                         <div style={{minWidth:90, fontSize:12}}>{s.material === 'steel' ? 'Steel' : 'RC'}</div>
                         <div style={{flex:1, fontSize:12}}>
