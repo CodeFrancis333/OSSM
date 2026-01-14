@@ -149,6 +149,13 @@ export default function App(){
     return entry.base.concat(generated.slice(entry.base.length))
   }
 
+  function getSectionColor(section, index, colors){
+    if (sectionPalette === 'All Gray') {
+      return section.material === 'steel' ? '#5b6777' : '#cbd5e1'
+    }
+    return colors[index % colors.length]
+  }
+
   function addBomLine(line){
     const withId = { id: Date.now() + Math.random(), ...line }
     setBomLines(s => [withId, ...s])
@@ -680,7 +687,7 @@ export default function App(){
       ...model,
       sections: model.sections.map((s, index) => ({
         ...s,
-        color: colors[index % colors.length],
+        color: getSectionColor(s, index, colors),
       })),
     })
   }
@@ -688,7 +695,7 @@ export default function App(){
   function handleAddSection(){
     const name = sectionForm.name || `${sectionForm.category} ${model.sections.length + 1}`
     const colors = getPaletteColors(sectionPalette, model.sections.length + 1)
-    const color = colors[model.sections.length % colors.length]
+    const color = getSectionColor({ material: sectionForm.material }, model.sections.length, colors)
     if (sectionForm.material === 'steel') {
       const parseNumber = (value) => {
         const s = String(value ?? '').trim()
@@ -2130,8 +2137,9 @@ export default function App(){
                       onChange={(e)=> updateMemberMeta(selectedMember.id, { align: e.target.value })}
                       style={{marginLeft:6}}
                     >
-                      <option value="center">Center</option>
-                      <option value="top">Top</option>
+                      <option value="center">Centroid</option>
+                      <option value="top">Top Centroid</option>
+                      <option value="bottom">Bottom Centroid</option>
                     </select>
                   </label>
                   <label style={{fontSize:12}}>

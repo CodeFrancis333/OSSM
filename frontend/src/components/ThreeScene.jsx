@@ -693,8 +693,7 @@ const ThreeScene = forwardRef((props, ref) => {
         if (m.aNode === nodeMesh || m.bNode === nodeMesh) {
           const pa = m.aNode.position
           const pb = m.bNode.position
-          const off = m.offsetY || 0
-          const arr = new Float32Array([pa.x, pa.y + off, pa.z, pb.x, pb.y + off, pb.z])
+          const arr = new Float32Array([pa.x, pa.y, pa.z, pb.x, pb.y, pb.z])
           m.line.geometry.setAttribute('position', new THREE.BufferAttribute(arr, 3))
           m.line.geometry.attributes.position.needsUpdate = true
           m.line.geometry.computeBoundingSphere()
@@ -1207,10 +1206,13 @@ const ThreeScene = forwardRef((props, ref) => {
     }
 
     function getMemberOffsetY(member, sectionsById) {
-      if (!member || member.align !== 'top') return 0
+      if (!member) return 0
       const section = member.sectionId && sectionsById ? sectionsById[member.sectionId] : null
       const h = section?.dims?.h
-      return typeof h === 'number' ? -h / 2 : 0
+      if (typeof h !== 'number') return 0
+      if (member.align === 'top') return -h / 2
+      if (member.align === 'bottom') return h / 2
+      return 0
     }
 
     function getMemberSectionDims(section) {
@@ -1723,7 +1725,7 @@ const ThreeScene = forwardRef((props, ref) => {
         m.offsetY = offsetY
         const pa = m.aNode.position
         const pb = m.bNode.position
-        const arr = new Float32Array([pa.x, pa.y + offsetY, pa.z, pb.x, pb.y + offsetY, pb.z])
+        const arr = new Float32Array([pa.x, pa.y, pa.z, pb.x, pb.y, pb.z])
         m.line.geometry.setAttribute('position', new THREE.BufferAttribute(arr, 3))
         m.line.geometry.attributes.position.needsUpdate = true
         m.line.geometry.computeBoundingSphere()
